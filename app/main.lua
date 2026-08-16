@@ -1,0 +1,170 @@
+-- main.lua - the cart's entry points, and nothing else.
+--
+-- The wall this file guards: the SIM knows nothing about drawing, and the
+-- RENDERER never writes to the sim. Everything between them goes through
+-- an intent (player -> sim) or a snapshot (sim -> renderer).
+
+local vp      = require("render.viewport")
+local sim     = require("sim.init")
+local intents = require("input.intents")
+local probe   = require("debug.probe")
+local audio   = require("audio.init")
+local save    = require("sim.save")
+local menu    = require("ui.menu")
+
+local S
+local booted = false
+local DT = 1 / 60
+
+-- TEST MODE: if app/testmode exists in the bundle, the cart runs the pure
+-- sim suite instead of the game and prints its results.
+local testMode = false
+
+function love.load()
+  vp.init()
+
+  local info = love.filesystem.getInfo and love.filesystem.getInfo("testmode")
+  if info then
+    testMode = true
+    require("test.simtest").run()
+    return
+  end
+
+  -- ONE persistent colony. A save names the seed its map was generated
+  -- from, so restoring rebuilds the identical field of mounds.
+  local blob = save.read()
+  local seed = blob and save.peekSeed(blob)
+  if not seed then
+    seed = math.floor(love.math.random() * 2147483000) + 1
+  end
+  -- A NEW PLAYER STARTS IN THE CAMPAIGN. The generated field is the full
+  -- game with every idea live at once, which is what made this
+  -- unreadable to sit down in front of.
+  local levelId = blob and save.peekLevel(blob) or "gather"
+
+  -- BUILD-TIME LEVEL OVERRIDE, for gates. A marker file named `startlevel`
+  -- holding a level id boots straight into it, so a suite can test the war
+  -- map without playing three missions to reach it. The marker is written
+  -- where the cart is PACKED, which is somewhere a harness controls --
+  -- unlike a host flag, which the cart cannot see. (`opengarden` is the
+  -- same idea and had been dead since it was added: build.sh wrote it and
+  -- nothing ever read it, so --open silently packed an ordinary cart.)
+  if love.filesystem.getInfo then
+    if love.filesystem.getInfo("startlevel") then
+      local want = (love.filesystem.read("startlevel") or ""):gsub("%s+", "")
+      if want ~= "" then levelId = want end
+    elseif love.filesystem.getInfo("opengarden") then
+      levelId = nil          -- nil selects the generated field
+    end
+  end
+  S = sim.new(seed, levelId)
+
+  if blob then
+    local ok, msg = save.deserialize(S, blob)
+    if ok then
+      print("@load " .. msg)
+    else
+      print("@load REJECTED " .. tostring(msg) .. " (starting fresh)")
+      S = sim.new(math.floor(love.math.random() * 2147483000) + 1,
+                  "gather")
+    end
+  end
+
+  -- Start looking at home.
+  local home = S.world.node[S.world.homeId]
+  if home then vp.centreOn(home.x, home.y) end
+
+  audio.init()
+  probe.init(S)
+  booted = true
+end
+
+function love.update()
+  if testMode or not booted then return end
+
+  -- ADVANCE THE CAMPAIGN, between frames.
+  --
+  -- The menu (and the START prompt on a finished level) can only ASK for
+  -- this: rebuilding the world mid-frame would strand every ant currently
+  -- walking an edge. It is done here, before anything reads the world.
+  --
+  -- This was dead for the whole campaign's life -- menu.wantNextLevel was
+  -- set and nothing ever consumed it, so "next field" silently did
+  -- nothing and every level after the first was unreachable in play.
+  if menu.wantNextLevel then
+    menu.wantNextLevel = false
+    local nextId = S.nextLevelId
+    if nextId then
+      S = sim.new(math.floor(love.math.random() * 2147483000) + 1, nextId)
+      local home = S.world.node[S.world.homeId]
+      if home then vp.centreOn(home.x, home.y) end
+      intents.reset()
+      probe.init(S)
+      print("@level started " .. tostring(nextId))
+    end
+  end
+
+  -- So START can mean "next field" on a finished level (see intents).
+  intents.levelDone = S.levelDone and S.nextLevelId ~= nil
+  local list = intents.poll(S.world, vp, S.agents)
+  for i = 1, #list do
+    local it = list[i]
+    if it.kind == "debug" then
+      probe.command(S, it.what)
+    elseif it.kind == "pan" then
+      vp.moveCamera(it.dx, it.dy)
+    elseif it.kind == "zoom" then
+      vp.zoomBy(it.f)
+    elseif it.kind == "select" then
+      probe.noteCursor(it)
+    else
+      local ok = sim.apply(S, it)
+      probe.noteIntent(it, ok)
+      audio.onIntent(it.kind, ok)
+    end
+  end
+
+  -- THE CAMERA FOLLOWS THE CURSOR when it would otherwise walk off screen.
+  -- Only nudges near an edge, so ordinary play does not drift the view.
+  if intents.cursor.node then
+    local n = S.world.node[intents.cursor.node]
+    if n then
+      local sx, sy = vp.worldToScreen(n.x, n.y)
+      local mx, my = vp.w * 0.24, vp.h * 0.24
+      local sc = vp.worldScale()
+      local dx, dy = 0, 0
+      if sx < mx then dx = (sx - mx) / sc
+      elseif sx > vp.w - mx then dx = (sx - (vp.w - mx)) / sc end
+      if sy < my then dy = (sy - my) / sc
+      elseif sy > vp.h - my then dy = (sy - (vp.h - my)) / sc end
+      if dx ~= 0 or dy ~= 0 then vp.moveCamera(dx * 0.10, dy * 0.10) end
+    end
+  end
+
+  sim.update(S, DT)
+  audio.update(S, DT)
+
+  -- Autosave every half minute of play: there is one colony and nothing
+  -- to lose by walking away.
+  S._saveTimer = (S._saveTimer or 0) + DT
+  if S._saveTimer > 30 then
+    S._saveTimer = 0
+    save.write(S)
+  end
+
+  probe.update(S, DT)
+  probe.slots(intents)
+end
+
+function love.draw()
+  if testMode then
+    return
+  end
+  if not booted then return end
+
+  local render = require("render.init")
+  render.draw(sim.snapshot(S), vp, intents)
+  probe.draw(S, vp, intents)
+end
+
+function love.mousepressed() end

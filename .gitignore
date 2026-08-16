@@ -1,0 +1,18 @@
+# Build outputs: the cart and its engine copy are produced by build.sh from
+# the wasmcart-lua checkout, so they are reproducible rather than sources.
+main.wasm
+*.wasc
+app/assets.index
+
+# Test artefacts
+test/shots/
+
+# Test-mode marker: a build flag, never committed (a committed one would
+# ship a cart that runs the unit suite instead of the game).
+app/testmode
+
+# Gate-mode marker: boots the generated map instead of the campaign.
+app/opengarden
+# Build-time level override for gates (see main.lua); never committed.
+app/startlevel
+test/suite.log
