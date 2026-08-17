@@ -5,6 +5,7 @@
 // the sim flag being right while the mound renders brown would pass any
 // state-only check and still be the bug.
 import { api, driver, makeReport } from './drive.mjs';
+import { readPNG, meanSaturation } from './png.mjs';
 import { execSync } from 'child_process';
 const t = api('formix-grey-suite');
 const d = driver(t, process.cwd() + '/formix.wasc');
@@ -32,18 +33,12 @@ if (st && st.playtestWindowOpen) {
 const STONE_MAX = 20;
 const EARTH_MIN = 25;
 
+// Mean colourfulness over a 26px disc: warm earth is saturated, grey
+// stone is not. Decoded in Node (tools/png.mjs) rather than shelled out
+// to Pillow, which is not installed everywhere and took this gate down
+// with a ModuleNotFoundError before it reached one assertion.
 function spread(png, cx, cy) {
-  const py = `
-from PIL import Image
-im=Image.open("${png}").convert('RGB'); px=im.load()
-tot=0;n=0
-for dy in range(-26,26,2):
-  for dx in range(-26,26,2):
-    if dx*dx+dy*dy > 676: continue
-    r,g,b=px[${cx}+dx,${cy}+dy]
-    tot += max(r,g,b)-min(r,g,b); n+=1
-print(round(tot/n,2))`;
-  return parseFloat(execSync(`python3 -c '${py.replace(/'/g, "'\\''")}'`).toString().trim());
+  return meanSaturation(png, cx, cy, 26, 2);
 }
 
 await d.boot(7);
@@ -123,15 +118,14 @@ if (ctrl) {
 // reaches past the widest mound on the board, so the silhouette edge is
 // actually in frame.
 function width(png, cx, cy) {
-  const py = `
-from PIL import Image
-im=Image.open("${png}").convert('RGB'); px=im.load()
-n=0
-for x in range(${cx}-140, ${cx}+140):
-  r,g,b=px[x,${cy}]
-  if r+g+b > 135: n+=1
-print(n)`;
-  return parseInt(execSync(`python3 -c '${py.replace(/'/g, "'\\''")}'`).toString().trim());
+  const im = readPNG(png);
+  let n = 0;
+  for (let x = cx - 140; x < cx + 140; x++) {
+    if (x < 0 || x >= im.w) continue;
+    const [r, g, b] = im.at(x, cy);
+    if (r + g + b > 135) n++;
+  }
+  return n;
 }
 
 // Raise a queen, then watch it and an empty mound together. The ants were
