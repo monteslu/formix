@@ -18,7 +18,14 @@ if (existsSync('app/startlevel')) {
 }
 const suites = ['test-reachable', 'test-queen', 'test-grey', 'test-gameplay',
                 'test-longrun', 'test-deadend', 'test-strand',
-                'test-relief', 'test-relief2', 'test-campaign', 'test-render', 'test-war'];
+                'test-campaign', 'test-render', 'test-camera',
+                // THE CART-REBUILDING GATES GO LAST, all of them. test-war
+                // was the first, for the reason below; test-food and
+                // test-bootstrap pack their own boards the same way and
+                // belong in the same quarantine. Running them before
+                // test-render is exactly the mistake the note describes.
+                'test-war', 'test-food', 'test-forage', 'test-locrules',
+                'test-bootstrap'];
 // LAST, ON PURPOSE: test-war rebuilds the cart twice (it needs its own
 // level) and the pixel gate that followed it came back with a completely
 // black frame on two separate runs, then passed 4/4 in isolation. Putting

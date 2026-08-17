@@ -149,4 +149,44 @@ R.check('no lua errors during the war', d.errors().length === 0,
           ratio >= 0.33, `theirs ${m1.theirs} vs mine ${m1.mine} = ${(ratio*100).toFixed(0)}%`);
 }
 
+// ── the rivals feed themselves ─────────────────────────────────────────
+//
+// A colony that cannot eat is a colony that stops, and it stops SILENTLY:
+// the mounds are still there and the queens are still sitting on them, so
+// a frozen opponent looks exactly like a patient one. They are seeded
+// with a pantry to get going, but that runs out -- so what has to be
+// asserted is that they go and GET food, not that they were given some.
+//
+// Measured as items leaving the ground on a board the player never
+// touches. Nothing else on that map can pick anything up.
+{
+  const CART3 = process.cwd() + '/test/war-forage-cart.wasc';
+  writeFileSync('app/startlevel', 'war');
+  try {
+    execSync('./build.sh', { stdio: 'ignore' });
+    copyFileSync(process.cwd() + '/formix.wasc', CART3);
+  } finally {
+    if (existsSync('app/startlevel')) unlinkSync('app/startlevel');
+    execSync('./build.sh', { stdio: 'ignore' });
+  }
+  const d3 = driver(api('formix-war-forage'), CART3);
+  await d3.boot(7, { level: 'war' });
+
+  const before = await d3.metric();
+  // Long enough for the seeded pantries to run down and hunger to
+  // become the thing driving them.
+  for (let i = 0; i < 6; i++) await d3.step(3600);
+  const after = await d3.metric();
+
+  R.check('the war map has food on it to fight over',
+          before.items > 0, `items=${before.items}`);
+  R.check('rivals forage for themselves (food leaves the ground unaided)',
+          after.items < before.items,
+          `items ${before.items} -> ${after.items}, player picked ${after.picked}`);
+  R.check('and the player did none of it',
+          after.picked === 0, `player picked=${after.picked}`);
+  R.check('they are still growing at the end, not starved out',
+          after.theirs > 0, `theirs=${after.theirs}`);
+}
+
 process.exit(R.done() ? 0 : 1);

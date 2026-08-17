@@ -131,13 +131,36 @@ export function driver(t, cartPath) {
         // `fg` (the HOLDER's garrison) is optional so this still parses a
         // cart built before it existed -- a gate that silently matched
         // nothing would report every mound as missing rather than fail.
-        m = l.match(/^@mound (\w+) (\S+) g=(\d+) gi=(\d+) (?:fg=(\d+) )?q=(\d+)\/(\d+) energy=(\d+) reach=(\d+) seen=(\w+) brood=(\d+)/);
+        // `held` and `obs` are optional for the same reason `fg` is: an
+        // older cart does not print them, and a gate that silently
+        // matched nothing would report every mound as missing.
+        m = l.match(/^@mound (\w+) (\S+) g=(\d+) gi=(\d+) (?:fg=(\d+) )?q=(\d+)\/(\d+) energy=(\d+) reach=(\d+) seen=(\w+) brood=(\d+)(?: held=(\w+))?(?: obs=(\w+))?/);
         if (m) mound[m[1]] = { owner: m[2] === 'nil' ? null : m[2], g: +m[3], gi: +m[4],
                                fg: m[5] === undefined ? +m[3] : +m[5],
                                queens: +m[6], maxQueens: +m[7], energy: +m[8],
-                               reach: +m[9], seen: m[10] === 'true', brood: +m[11] };
+                               reach: +m[9], seen: m[10] === 'true', brood: +m[11],
+                               held: m[12] === 'true', observed: m[13] === 'true' };
       }
-      return { pos, mound };
+      // The camera, for the pan/zoom gate. Parsed from the same overlay
+      // dump: there is no pixel that says "the view moved 300 units".
+      let cam = null;
+      for (const l of lines) {
+        const m = l.match(/^@cam x=(-?[\d.]+) y=(-?[\d.]+) zoom=([\d.]+)/);
+        if (m) cam = { x: +m[1], y: +m[2], zoom: +m[3] };
+      }
+      // The UI line too: `frac` is the composed order's quantity, and it is
+      // ONLY printed while the developer overlay is up -- so reading it from
+      // the banked log without a fresh inspect gives a stale value from the
+      // previous toggle, which is a silent wrong answer rather than a
+      // missing one.
+      let ui = null;
+      for (const l of lines) {
+        const m = l.match(/^@ui menu=(\w+) row=(\d+) cursor=(\S+) selected=(\S+) frac=([\d.]+)/);
+        if (m) ui = { menu: m[1] === 'true', row: +m[2],
+                      cursor: m[3] === 'nil' ? null : m[3],
+                      selected: m[4] === 'nil' ? null : m[4], frac: +m[5] };
+      }
+      return { pos, mound, cam, ui };
     },
     async metric() {
       await t('frame', { op: 'step', frames: 32 });

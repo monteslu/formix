@@ -50,8 +50,19 @@ send    {from, to, count}
 queen   {node}
 upgrade {node, stat}
 select  {node}            -- cursor moved; UI only
-pan / zoom / debug
+pan     {dx, dy}          -- world units; touch drag, mouse drag, right stick
+zoom    {f, sx, sy}       -- continuous + anchor: pinch, wheel
+        {step}            -- one rung of render/viewport ZOOM_STEPS: shoulders
+        {reset}           -- default zoom, centred on the cursor: R3
+debug
 ```
+
+THE CAMERA IS NOT THE CURSOR, and they are only loosely coupled: panning
+never moves the cursor, and moving the cursor recalls the view for a short
+window afterwards. Both directions matter -- a nudge that ran continuously
+undid every manual pan the instant the player let go, which is a camera you
+cannot aim. Every zoom path goes through one intent so the anchor and the
+world-bounds clamp cannot be forgotten by whichever input is added next.
 
 The core gesture is drag-from-a-mound, and the drag distance chooses how
 many ants go. A tap only ever selects — an irreversible move should never
@@ -116,6 +127,11 @@ a claim. Some gates worth knowing about:
 | `test-war` | that the war map actually produces a war: mounds captured from another colony, not merely ownership changing |
 | `test-gameplay` | the input contract, including that tap-tap does *not* send |
 | `test-campaign` | that a level transition really rebuilds the world |
+| `test-camera` | pan/zoom on all three inputs: empty-ground drag pans, a mound drag still sends, pinch zooms ANCHORED (the world under the centroid stays put), a second finger cancels a send, the shoulder mode split holds in both directions, and the camera cannot be flung out of the world |
+| `test-food` | queens eat: an empty pantry lays nothing, N food buys exactly N ants, the 10-per-queen cap holds, and no-workers-no-food is game over |
+| `test-forage` | the food ledger closes -- ground + carried + pool + eaten always equals what was taken -- and ants deliver and STAY rather than re-foraging |
+| `test-locrules` | food is a destination, never a bridge or a watchtower |
+| `test-bootstrap` | every board can reach a fed queen from its opening position |
 
 **Gates are written to fail.** Several were rewritten after passing a
 deliberately sabotaged build — the war gate first passed with the enemy AI

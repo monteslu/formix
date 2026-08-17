@@ -5,6 +5,7 @@
 -- an intent (player -> sim) or a snapshot (sim -> renderer).
 
 local vp      = require("render.viewport")
+local W       = require("sim.world")
 local sim     = require("sim.init")
 local intents = require("input.intents")
 local probe   = require("debug.probe")
@@ -14,6 +15,9 @@ local menu    = require("ui.menu")
 
 local S
 local booted = false
+-- The cursor-follow window: see the nudge in love.update.
+local lastCursor = nil
+local followFrames = 0
 local DT = 1 / 60
 
 -- TEST MODE: if app/testmode exists in the bundle, the cart runs the pure
@@ -113,8 +117,26 @@ function love.update()
       probe.command(S, it.what)
     elseif it.kind == "pan" then
       vp.moveCamera(it.dx, it.dy)
+      vp.clampToWorld(S.world)
     elseif it.kind == "zoom" then
-      vp.zoomBy(it.f)
+      -- THREE SHAPES, ONE INTENT. Every input that changes the scale
+      -- arrives here so the clamp and the anchor cannot be forgotten by
+      -- whichever one is added next:
+      --   {reset}          R3 / the view-reset button
+      --   {step}           pad shoulders: the fixed rungs
+      --   {f, sx, sy}      pinch and wheel: continuous, anchored
+      if it.reset then
+        vp.cam.zoom = vp.ZOOM_DEFAULT
+        local n = intents.cursor.node and W.site(S.world, intents.cursor.node)
+        if n then vp.centreOn(n.x, n.y) end
+      elseif it.step then
+        -- Anchored at the screen centre, which for a step IS the natural
+        -- anchor: the pad has no pointer to zoom toward.
+        vp.zoomStepAt(vp.w * 0.5, vp.h * 0.5, it.step)
+      elseif it.f then
+        vp.zoomAt(it.sx or vp.w * 0.5, it.sy or vp.h * 0.5, it.f)
+      end
+      vp.clampToWorld(S.world)
     elseif it.kind == "select" then
       probe.noteCursor(it)
     else
@@ -124,9 +146,27 @@ function love.update()
     end
   end
 
-  -- THE CAMERA FOLLOWS THE CURSOR when it would otherwise walk off screen.
-  -- Only nudges near an edge, so ordinary play does not drift the view.
-  if intents.cursor.node then
+  -- THE CAMERA FOLLOWS THE CURSOR when it would otherwise walk off screen,
+  -- but ONLY FOR A MOMENT AFTER THE CURSOR ACTUALLY MOVES.
+  --
+  -- That window is the whole of the loose coupling this camera is built on
+  -- (the Civ VI rule): moving the cursor recalls the view, and moving the
+  -- VIEW is never undone. Left running continuously, the nudge fought every
+  -- manual camera control -- suspending it mid-gesture was not enough,
+  -- because the instant a pinch ended it dragged the view ~6 units a frame
+  -- back toward the off-screen cursor and quietly threw away the anchored
+  -- zoom the player had just performed. A camera that creeps back to where
+  -- it was is a camera the player cannot aim.
+  --
+  -- 45 frames is a little longer than the 10%-per-frame ease takes to
+  -- converge, so a cursor hop still glides rather than snapping.
+  if intents.cursor.node ~= lastCursor then
+    lastCursor = intents.cursor.node
+    followFrames = 45
+  end
+  if followFrames > 0 then followFrames = followFrames - 1 end
+
+  if intents.cursor.node and not intents.camHeld and followFrames > 0 then
     local n = S.world.node[intents.cursor.node]
     if n then
       local sx, sy = vp.worldToScreen(n.x, n.y)

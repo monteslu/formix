@@ -9,6 +9,7 @@
 
 local ground  = require("render.ground")
 local mounds  = require("render.mounds")
+local locations = require("render.locations")
 local ants    = require("render.ants")
 local fx      = require("render.fx")
 local orders  = require("render.orders")
@@ -41,6 +42,9 @@ function M.draw(snap, vp, intents)
   local hdr = fx.beginScene()
 
   ground.draw(snap, vp)
+  -- Locations UNDER the mounds: a patch of grain that overlapped a hill
+  -- would draw on top of the thing the map is about.
+  locations.draw(snap, vp)
   mounds.draw(snap, vp, intents)
   orders.draw(snap, vp, intents)
   ants.draw(snap, vp)

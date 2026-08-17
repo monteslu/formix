@@ -17,6 +17,8 @@
 
 local fonts = require("ui.fonts")
 
+local WW = require("sim.world")
+
 local M = {}
 
 -- How many times a verb must be used before its hint stops appearing.
@@ -111,8 +113,8 @@ function M.drawRings(snap, vp, intents)
   -- so it appears only once the pad has actually been used.
   if not intents.padUsed then return end
 
-  local cur = intents.cursor.node and world.node[intents.cursor.node]
-  local sel = intents.selected and world.node[intents.selected]
+  local cur = intents.cursor.node and WW.site(world, intents.cursor.node)
+  local sel = intents.selected and WW.site(world, intents.selected)
 
   -- The pending connection, drawn first so the rings sit on top.
   if sel and cur and sel ~= cur then
@@ -155,9 +157,9 @@ function M.draw(snap, vp, intents)
   local world = snap.world
   local s = vp.worldScale()
   if not intents.padUsed then return end
-  local cur = intents.cursor.node and world.node[intents.cursor.node]
+  local cur = intents.cursor.node and WW.site(world, intents.cursor.node)
   if not cur then return end
-  local sel = intents.selected and world.node[intents.selected]
+  local sel = intents.selected and WW.site(world, intents.selected)
 
   -- One line, naming one button, only while it is still news. The verbs it
   -- names are the 4X ones now: pick up a garrison, send it somewhere.

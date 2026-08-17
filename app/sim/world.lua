@@ -40,6 +40,58 @@ local KINDS = {
 }
 M.KINDS = KINDS
 
+-- ── LOCATIONS: food in the ground ──────────────────────────────────────
+--
+-- A location is somewhere worth walking to that is NOT a mound. It sits
+-- in the same field and is claimed the same way, but it has none of a
+-- mound's organs: no queens, no brood, no stats, no upgrades, and no
+-- reach of its own. What it has is ITEMS, and an ant that arrives where
+-- there is one picks it up and carries it home.
+--
+-- THEY ARE A SEPARATE LIST, not mounds wearing a flag, and that is a
+-- deliberate structural choice. Nearly every loop in this game walks
+-- `world.nodes` meaning "mounds" -- production, vision, the rival's
+-- holdings, the save format, the panel, the minimap. A flagged mound
+-- would need an exclusion in every one of them, and the first one anybody
+-- forgot would be a queen raised on a patch of grain.
+--
+--   items   how many are pickable right now
+--   value   food each one is worth
+--   cap     how many it holds when full
+--   regrow  seconds per item; nil means never (what is taken is gone)
+--   guard   hits an attacker must land before the place can be claimed
+--   relay   may ants travel THROUGH it to somewhere further?
+--   scouts  does holding it show you who is on the ground next door?
+--
+-- `relay` and `scouts` are FALSE for everything that currently exists,
+-- and they are per-kind rather than a blanket rule about locations
+-- because they will not stay that way. A patch of aphids is a meal and a
+-- spider is a fight -- neither has any business changing the shape of the
+-- map. A FARM, if one is ever built here, is a different proposition: it
+-- would be a thing the colony makes, and making it extend the network is
+-- exactly what would justify building one. Leaving these as flags means
+-- that day is a line in this table rather than surgery on the pathfinder.
+-- SIZED LIKE THE MOUNDS THEY SIT AMONG (a small mound is 56, a plain one
+-- 78). The first pass drew them at 48-64 and they read as litter on the
+-- grass: too small to look like a destination, so the eye slid over the
+-- food and the map looked empty between the hills. A location has to say
+-- "there is somewhere to go here" from across the field, because
+-- deciding to walk over and find out what it is IS the mechanic.
+local LKINDS = {
+  -- Plump, juicy, and worth the walk. A one-off windfall.
+  aphids = { radius = 74, range = 900, items = 6, cap = 6, value = 4 },
+  -- The slow faucet, and the reason a colony need never starve outright:
+  -- one food per grain, but they come back.
+  grain  = { radius = 80, range = 900, items = 4, cap = 10, value = 1,
+             regrow = 20 },
+  -- Not a harvest -- a fight. Beat her and the legs are the prize. The
+  -- biggest of the three, and deliberately: she should look like trouble
+  -- the moment the fog lifts off her.
+  spider = { radius = 96, range = 900, items = 0, cap = 8, value = 3,
+             guard = 6, spoils = 8 },
+}
+M.LKINDS = LKINDS
+
 local function newId(w, prefix)
   w._nextId = w._nextId + 1
   return prefix .. w._nextId
@@ -48,10 +100,74 @@ end
 function M.new(rng)
   return {
     nodes = {}, node = {},
+    -- Locations live beside the mounds, never among them.
+    locs = {}, loc = {},
     _nextId = 0,
     rng = rng or math.random,
     time = 0,
   }
+end
+
+function M.addLoc(w, kind, x, y, opts)
+  opts = opts or {}
+  local spec = LKINDS[kind] or LKINDS.grain
+  local l = {
+    id = opts.id or newId(w, "L"),
+    kind = kind,
+    isLoc = true,
+    x = x, y = y,
+    radius = opts.radius or spec.radius,
+    owner = opts.owner or nil,
+    -- What is pickable, and what it is worth.
+    items = opts.items or spec.items or 0,
+    cap = opts.cap or spec.cap or 0,
+    value = opts.value or spec.value or 1,
+    regrow = opts.regrow or spec.regrow,   -- nil = never comes back
+    regrowT = 0,
+    -- A guarded place must be beaten before it can be claimed. The
+    -- spider is six defenders wearing one body: each attacker that
+    -- reaches her trades itself for one hit, exactly as an ant trades
+    -- itself for a defender on a mound.
+    guard = opts.guard or spec.guard or 0,
+    spoils = opts.spoils or spec.spoils or 0,
+    -- See the note on LKINDS: false for everything that exists today.
+    relay = opts.relay or spec.relay or false,
+    scouts = opts.scouts or spec.scouts or false,
+    -- A nominal radius, kept only so the generic helpers have something
+    -- to read. It is NOT what decides whether you can get here: a
+    -- location's link to a mound is judged by the MOUND's reach, both
+    -- ways, so an ant can always walk back the way it was thrown. See
+    -- M.inRange.
+    baseRange = opts.range or spec.range,
+    rangeStat = 1,
+    seed = opts.seed or math.floor(w.rng() * 1e9),
+    -- The same three flags a mound has. `seen` is always true (the shape
+    -- of the field is never hidden); what the fog withholds is the KIND,
+    -- so grain and a spider are the same grey clump until somebody
+    -- stands on one. That is what makes scouting a location tense.
+    -- ALWAYS true, and written as a constant rather than as
+    -- `opts.seen or true` -- which reads like an option and is not one,
+    -- since `false or true` is true. The shape of the field is never
+    -- hidden; what the fog withholds is the KIND.
+    seen = true,
+    observed = false,
+    held = false,
+  }
+  w.locs[#w.locs + 1] = l
+  w.loc[l.id] = l
+  return l
+end
+
+-- A mound OR a location, by id. Everything that walks the network wants
+-- this; everything that is about colonies wants `w.node` alone.
+function M.site(w, id)
+  return w.node[id] or w.loc[id]
+end
+
+-- Is this place claimable ground rather than a colony? Used wherever the
+-- rules differ: you cannot raise a queen on a patch of grain.
+function M.isLoc(x)
+  return x ~= nil and x.isLoc == true
 end
 
 function M.addNode(w, kind, x, y, opts)
@@ -136,6 +252,25 @@ end
 -- is load-bearing for balance; the ring is a picture of it.
 function M.inRange(w, from, to)
   if not from or not to or from == to then return false end
+
+  -- A LOCATION HAS NO REACH OF ITS OWN. Its connection to a mound is
+  -- decided by the MOUND's reach, in both directions -- which makes the
+  -- link symmetric, and that is not a nicety:
+  --
+  -- an ant sent to a patch of food has to be able to WALK BACK. Judging
+  -- the return leg by the patch's own radius stranded carriers on any
+  -- location that a mound could only just reach: seven grains picked up,
+  -- nothing ever delivered, the ants standing on the food for the rest of
+  -- the game holding it. The mound threw them there; the mound can take
+  -- them back.
+  --
+  -- Two locations are NEVER connected to each other. That is the rule
+  -- that keeps food from becoming a chain of stepping stones across the
+  -- map, and it is why this is a reach question rather than a distance
+  -- one.
+  local fl, tl = from.isLoc, to.isLoc
+  if fl and tl then return false end
+  if fl then return M.dist(from, to) <= M.reach(to) end
   return M.dist(from, to) <= M.reach(from)
 end
 
@@ -143,10 +278,26 @@ end
 -- network -- one hop, and no further. Recomputed rather than stored
 -- because a mound's range stat can grow, and a network that went stale
 -- when you upgraded would be a lie the player could not see.
+-- LOCATIONS ARE DESTINATIONS, NEVER BRIDGES.
+--
+-- They appear here, so a patch of food inside your reach can be sent to
+-- and walked on. What they must never do is EXTEND anything: holding a
+-- grain patch does not let you throw further, does not open a route to
+-- the mound behind it, and does not see for you. Only mounds do that.
+--
+-- Food that widened the network would quietly change the shape of the
+-- map -- the orbit rule is the whole puzzle, and a patch of grain is not
+-- a colony. Proximity still governs everything: you have to be near
+-- enough to reach it, exactly like any other target. See M.path, which
+-- refuses to relay THROUGH one.
 function M.neighbours(w, n)
   local out = {}
   for i = 1, #w.nodes do
     local o = w.nodes[i]
+    if o ~= n and M.inRange(w, n, o) then out[#out + 1] = o end
+  end
+  for i = 1, #w.locs do
+    local o = w.locs[i]
     if o ~= n and M.inRange(w, n, o) then out[#out + 1] = o end
   end
   return out
@@ -179,7 +330,7 @@ end
 -- take the poor one between you and it, rather than a free move.
 function M.path(w, fromId, toId, side)
   if fromId == toId then return nil end
-  local from, to = w.node[fromId], w.node[toId]
+  local from, to = M.site(w, fromId), M.site(w, toId)
   if not from or not to then return nil end
   side = side or from.owner
 
@@ -202,9 +353,14 @@ function M.path(w, fromId, toId, side)
           end
           return out
         end
-        -- Only carry on THROUGH a mound you hold. An unheld one can be a
-        -- destination but never a staging post.
-        if nb.owner == side then queue[#queue + 1] = nb end
+        -- Only carry on THROUGH a MOUND you hold. An unheld one can be a
+        -- destination but never a staging post -- and a LOCATION is never
+        -- a staging post at all, however firmly you hold it. Food does
+        -- not extend the network: a grain patch is somewhere to walk to,
+        -- not a bridge to the ground beyond it.
+        if nb.owner == side and (not nb.isLoc or nb.relay) then
+          queue[#queue + 1] = nb
+        end
       end
     end
   end
@@ -221,16 +377,48 @@ end
 -- also what it can SEE: holding ground is how the map opens up.
 function M.reachable(w, side)
   local out = {}
-  for i = 1, #w.nodes do
-    local a = w.nodes[i]
-    if a.owner == side then
-      for j = 1, #w.nodes do
-        local b = w.nodes[j]
-        if b ~= a and M.inRange(w, a, b) then out[b.id] = true end
-      end
+  local function from(a)
+    if a.owner ~= side then return end
+    for j = 1, #w.nodes do
+      local b = w.nodes[j]
+      if b ~= a and M.inRange(w, a, b) then out[b.id] = true end
+    end
+    for j = 1, #w.locs do
+      local b = w.locs[j]
+      if b ~= a and M.inRange(w, a, b) then out[b.id] = true end
     end
   end
+  -- Mounds only as SOURCES: reach belongs to colonies. A location you
+  -- hold is somewhere your ants are standing, not somewhere they can
+  -- throw from.
+  for i = 1, #w.nodes do from(w.nodes[i]) end
   return out
+end
+
+-- ── the ground's own clock ─────────────────────────────────────────────
+-- SOME FOOD COMES BACK AND SOME DOES NOT, and that is the whole
+-- difference between the kinds. Grain regrows a stalk at a time forever,
+-- which is the reason a colony need never starve outright; aphids and
+-- spider legs are taken once and gone.
+--
+-- It regrows whether or not anybody owns the patch: this is the world's
+-- faucet, not a reward for holding ground.
+function M.updateLocs(w, dt)
+  for i = 1, #w.locs do
+    local l = w.locs[i]
+    if l.regrow and l.items < l.cap then
+      l.regrowT = (l.regrowT or 0) + dt
+      while l.regrowT >= l.regrow and l.items < l.cap do
+        l.regrowT = l.regrowT - l.regrow
+        l.items = l.items + 1
+      end
+    elseif l.regrow then
+      -- Full: hold the clock at zero rather than banking time, or a
+      -- patch left alone for a minute dumps three stalks the instant one
+      -- is taken.
+      l.regrowT = 0
+    end
+  end
 end
 
 -- Seconds per larva PER QUEEN, with the mound's growth stat. A mound with
@@ -247,8 +435,15 @@ function M.digest(w)
     elseif not n.owner then neutral = neutral + 1 end
     nurseries = nurseries + #(n.queens or {})
   end
-  return string.format("nodes=%d owned=%d neutral=%d queens=%d",
-    #w.nodes, owned, neutral, nurseries)
+  local locs, locOwned, items = #w.locs, 0, 0
+  for i = 1, #w.locs do
+    local l = w.locs[i]
+    if l.owner == "you" then locOwned = locOwned + 1 end
+    items = items + (l.items or 0)
+  end
+  return string.format(
+    "nodes=%d owned=%d neutral=%d queens=%d locs=%d locsOwned=%d items=%d",
+    #w.nodes, owned, neutral, nurseries, locs, locOwned, items)
 end
 
 return M

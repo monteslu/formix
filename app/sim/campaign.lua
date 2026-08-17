@@ -28,11 +28,17 @@ M.levels = {
     -- the panel offers the queen. Two ideas (a send moves real ants; ten
     -- ants buy production) taught by arithmetic rather than by text.
     blurb = "No mound has ten ants. Gather them.",
+    -- THE LESSON GREW ONE CLAUSE when queens started eating. It used to
+    -- end at "she lays larvae", which is now only true if somebody has
+    -- fed her -- so the level teaches the whole loop: gather, raise her,
+    -- and bring her something to eat. The aphids are placed in easy
+    -- reach and are the first food a player ever sees.
     steps = {
       "Press  A  on a mound to pick up its ants",
       "Aim with the  D-PAD, then  A  to send them",
       "Ten ants in one mound can raise a queen -- press  Y",
-      "She lays larvae. They hatch into workers.",
+      "She needs food. Send ants to the aphids.",
+      "They carry it home. She lays. They hatch.",
     },
     -- Deliberately no rivals and nothing hostile.
     nodes = {
@@ -44,6 +50,14 @@ M.levels = {
       -- is somewhere obvious to spend the ants she makes.
       { kind = "plain", x = -832, y = -528 },
       { kind = "rich",  x = 1024, y = 400 },
+    },
+    -- Two clusters, both inside the opening position's reach, so the
+    -- first meal is never a puzzle about geography. Aphids rather than
+    -- grain because they are worth four each: one trip visibly changes
+    -- the number, which is what makes the lesson land.
+    locations = {
+      { kind = "aphids", x = -260, y = -760, items = 4 },
+      { kind = "aphids", x = 880,  y = 300,  items = 4 },
     },
   },
   {
@@ -81,6 +95,15 @@ M.levels = {
       -- (1268), so it keeps the lesson: take n3 first, then relay.
       { kind = "plain", x = -1241, y = -259 },
     },
+    -- Grain, and this is where the player meets the slow faucet: it
+    -- comes back, so the mound beside it is worth holding rather than
+    -- stripping. One patch near the start and one out by the far
+    -- ground, so expanding and eating pull in the same direction.
+    locations = {
+      { kind = "grain",  x = 420,  y = -640, items = 6 },
+      { kind = "aphids", x = -900, y = 820,  items = 5 },
+      { kind = "grain",  x = 1500, y = 300,  items = 4 },
+    },
   },
   {
     id = "discover",
@@ -102,6 +125,11 @@ M.levels = {
       "Send more than they have, and the mound changes hands",
     },
     wakeOnContact = true,
+    -- Red's pantry. She is asleep and laying at a quarter rate, so this
+    -- is what she grows on while you are still finding her -- enough to
+    -- be a colony worth taking seriously when you arrive, not enough to
+    -- have run away with the map.
+    startFood = { red = 60 },
     nodes = {
       { kind = "plain", x = 0, y = 0,   own = true, ants = 12, queens = 1 },
       { kind = "small", x = 704, y = -336 },
@@ -117,8 +145,25 @@ M.levels = {
       -- garrison that keeps growing (slowly) while undiscovered makes
       -- contact an actual event -- you have to bring a real column, and
       -- losing the first attack is survivable rather than the end.
-      { kind = "plain", x = 1888, y = -160, foe = "red", ants = 20, queens = 2 },
-      { kind = "small", x = 1520, y = 560,  foe = "red", ants = 10, queens = 1 },
+      -- HEADROOM UNDER THE CAP, or she is asleep AND full and the
+      -- "keeps growing while undiscovered" promise above is a lie. A
+      -- mound stops laying at ten workers per queen, and this pair was
+      -- authored at exactly 20/2 and 10/1 -- both already at the ceiling,
+      -- so red sat at thirty ants for the whole exploration and arrived
+      -- as the same statue the frozen-rival note warns about. Two queens
+      -- over twelve workers leaves room to actually fill up.
+      { kind = "plain", x = 1888, y = -160, foe = "red", ants = 12, queens = 2 },
+      { kind = "small", x = 1520, y = 560,  foe = "red", ants = 5,  queens = 1 },
+    },
+    -- A SPIDER ON THE WAY TO RED, and this is where a grey clump first
+    -- bites. It sits off the direct line rather than blocking it, so
+    -- walking into her is a choice the player made about ground that
+    -- looked worth having -- and she is worth having: eight legs is a
+    -- bigger meal than anything else on the board.
+    locations = {
+      { kind = "grain",  x = -420, y = -520, items = 6 },
+      { kind = "aphids", x = 640,  y = 900,  items = 5 },
+      { kind = "spider", x = 1180, y = -560 },
     },
   },
   {
@@ -139,6 +184,10 @@ M.levels = {
       "They expand while you do; the middle is the prize",
       "Take enough of the field and it is over",
     },
+    -- Both colonies are awake from the first second and expanding, so
+    -- both are fed for the length of a real match. Equal stocks: the
+    -- three-way only works if neither rival is quietly the stronger.
+    startFood = { red = 90, gold = 90 },
     -- THE MAP HAS TO BE SMALL ENOUGH TO FIGHT ON. The first version put
     -- the three colonies in opposite corners of a field 3456 units across
     -- while a mound reaches ~1150 -- so every side expanded into its own
@@ -167,12 +216,122 @@ M.levels = {
       { kind = "plain", x = 1400, y = -640,  foe = "gold", ants = 18, queens = 1 },
       { kind = "small", x = 1210, y = 220,   foe = "gold", ants = 5 },
     },
+    -- FOOD IN THE MIDDLE, where the fighting is. Grain in the contested
+    -- centre makes the ground everyone wants also the ground everyone
+    -- needs, so the war is over something rather than for its own sake.
+    -- A patch behind each colony too, or whoever loses the middle first
+    -- simply stops and is not an opponent any more.
+    locations = {
+      { kind = "grain",  x = 0,     y = -900, items = 8 },
+      { kind = "aphids", x = 60,    y = 780,  items = 6 },
+      { kind = "grain",  x = -1500, y = 120,  items = 5 },
+      { kind = "grain",  x = 1520,  y = 100,  items = 5 },
+    },
   },
   {
     id = "open",
     name = "The open field",
     blurb = "Everything, all at once.",
     generated = true,
+  },
+
+  -- ── GATE-ONLY BOARDS, past the end of the campaign ────────────────────
+  --
+  -- Everything below is reachable ONLY by packing an `app/startlevel`
+  -- marker naming it. `next()` walks this list in order and `open` is
+  -- generated and never completes, so no player can ever arrive here.
+  -- They exist because a rule is only proved on a board built to prove
+  -- it: gathering twelve ants by hand to reach the interesting state is
+  -- how gates end up asserting on the setup instead of on the rule.
+  {
+    id = "gatefood",
+    name = "Gate: food",
+    blurb = "One mound, one queen, four workers.",
+    generated = false,
+    -- Four ants and a queen, with the saturation cap at ten: room for
+    -- exactly six larvae, so a fed run has one right answer.
+    nodes = {
+      { kind = "plain", x = 0, y = 0, own = true, ants = 4, queens = 1 },
+    },
+  },
+  {
+    id = "gateforage",
+    name = "Gate: forage",
+    blurb = "A queen, a few workers, and grain next door.",
+    generated = false,
+    -- One mound with a queen and room under the cap, one grain patch in
+    -- easy reach holding a known number of items, and nothing else on
+    -- the board. Every food in this world is countable, which is what
+    -- makes the ledger assertion possible.
+    nodes = {
+      { kind = "plain", x = 0, y = 0, own = true, ants = 6, queens = 1 },
+    },
+    locations = {
+      -- 700 units out: well inside a plain mound's 1150 reach.
+      { kind = "grain", x = 700, y = 0, items = 5 },
+    },
+  },
+  {
+    id = "gatebridge",
+    name = "Gate: food is not a bridge",
+    blurb = "A patch of grain between here and there.",
+    generated = false,
+    -- THE SHAPE THAT PROVES IT. n1 and n2 are 1900 apart -- far outside a
+    -- plain mound's 1150 reach -- with a grain patch sitting exactly
+    -- halfway, within reach of both. If a location could relay, taking
+    -- the grain would open a route to n2 and the far mound would become
+    -- sendable. It must not: food is somewhere to walk to, never a
+    -- stepping stone, so n2 stays unreachable until a MOUND bridges it.
+    nodes = {
+      { kind = "plain", x = 0, y = 0, own = true, ants = 12, queens = 1 },
+      { kind = "plain", x = 1900, y = 0 },
+    },
+    locations = {
+      { kind = "grain", x = 950, y = 0, items = 6 },
+      -- Out past everyone's reach, so it stays an unknown grey circle:
+      -- the state a player sees most often, and the one worth being able
+      -- to look at on demand.
+      { kind = "aphids", x = -1400, y = 260 },
+    },
+  },
+  {
+    id = "gatespider",
+    name = "Gate: spider",
+    blurb = "She is bigger than you are.",
+    generated = false,
+    -- Plenty of workers, no queen to distract the arithmetic, and one
+    -- spider six hits deep holding eight legs.
+    nodes = {
+      { kind = "plain", x = 0, y = 0, own = true, ants = 20, queens = 1 },
+    },
+    locations = {
+      { kind = "spider", x = 700, y = 0 },
+    },
+  },
+  {
+    id = "gatedeath",
+    name = "Gate: starvation",
+    blurb = "A mound, and nothing on it.",
+    generated = false,
+    -- Ground held, nobody home, nothing in the pantry: the exact shape
+    -- of the loss condition, true from the first tick.
+    nodes = {
+      { kind = "plain", x = 0, y = 0, own = true, ants = 0, queens = 0 },
+    },
+  },
+  {
+    id = "gatelive",
+    name = "Gate: not dead",
+    blurb = "A queen with one meal in the pantry.",
+    generated = false,
+    -- The CONTROL for gatedeath: no ants either, but a queen and a
+    -- grain of food, so the side is alive and must NOT be declared out.
+    -- A loss check that cannot tell these two boards apart is a loss
+    -- check that will end somebody's game by surprise.
+    nodes = {
+      { kind = "plain", x = 0, y = 0, own = true, ants = 0, queens = 1 },
+    },
+    startFood = 1,
   },
 }
 
@@ -194,7 +353,7 @@ end
 -- WHICH STEP THE PLAYER IS ON, read from the world rather than a script.
 -- A tutorial that advances on a timer tells someone who is stuck to hurry
 -- up; one that reads the actual state waits for them.
-function M.step(level, world, intents, agents)
+function M.step(level, world, intents, agents, food)
   if not level or not level.steps then return nil end
   local A = require("sim.agents")
   -- Any queen beyond the ones the level started with means the lesson
@@ -204,7 +363,13 @@ function M.step(level, world, intents, agents)
     queens = queens + #(world.nodes[i].queens or {})
   end
   if level.id == "gather" then
-    if queens > 0 then return 4 end
+    -- Once she exists the hint follows the FOOD, because that is the
+    -- next thing standing between the player and an ant hatching: step 4
+    -- says go and get some, step 5 says watch what happens. Reading the
+    -- pantry rather than a timer means it waits for them.
+    if queens > 0 then
+      return (food or 0) > 0 and 5 or 4
+    end
     -- Ten ants gathered anywhere: the queen is now affordable.
     for i = 1, #world.nodes do
       local n = world.nodes[i]
@@ -302,6 +467,35 @@ function M.complete(level, world, agents)
   return owned >= math.max(2, math.ceil(total * 0.66))
 end
 
+-- A level may seed a side's pantry, as a number (yours) or a table keyed
+-- by side. YOU always start hungry in the campaign proper -- the first
+-- food a player sees should be food they carried home.
+--
+-- RIVALS DO NOT, and that is not a favour to them. A colony with no food
+-- cannot lay, so a rival at zero is not a slow opponent but a STATUE:
+-- the war map went completely inert the moment queens had to eat, with
+-- both colonies frozen at their starting garrison for the whole match.
+-- Until they can forage for themselves they are handed a pantry, which
+-- is the same thing the map does for them with ants and ground.
+function M.startFood(level, side)
+  local f = level and level.startFood
+  if not f then return 0 end
+  if type(f) == "number" then
+    return (side == nil or side == "you") and f or 0
+  end
+  return f[side] or 0
+end
+
+-- Every side a level mentions, so the pantry can be seeded per colony.
+function M.sides(level)
+  local out, seen = { "you" }, { you = true }
+  for i = 1, #(level and level.nodes or {}) do
+    local foe = level.nodes[i].foe
+    if foe and not seen[foe] then seen[foe] = true; out[#out + 1] = foe end
+  end
+  return out
+end
+
 -- Build a level's map into an empty world. Returns true if it did; a
 -- `generated` level is left to the normal map builder.
 function M.build(level, world, W, agents, A)
@@ -331,6 +525,14 @@ function M.build(level, world, W, agents, A)
     for _ = 1, spec.ants or 0 do
       A.spawn(agents, made[i].id, side)
     end
+  end
+  -- Food in the ground. Hand-placed, because where the first meal sits
+  -- is the whole of what a level teaches about foraging.
+  for i = 1, #(level.locations or {}) do
+    local spec = level.locations[i]
+    W.addLoc(world, spec.kind, spec.x, spec.y, {
+      items = spec.items, seen = true,
+    })
   end
   return true
 end

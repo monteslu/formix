@@ -23,11 +23,25 @@ const src = readFileSync('app/sim/campaign.lua', 'utf8');
 const REACH = { home: 1500, rich: 1320, plain: 1150, small: 1000 };
 
 // Pull each level's id and its node list out of the Lua table.
+// SLICE AT THE LEVEL BOUNDARIES FIRST, then look for nodes inside each
+// slice. Scanning for `id = ... nodes = {` across the whole file lets a
+// level that has NO node list (the generated field) reach forward and
+// adopt the next level's mounds -- which it did, silently, and reported
+// the open field as an unreachable board that does not exist.
+const bounds = [...src.matchAll(/\bid\s*=\s*"([a-z]+)"/g)];
 const levels = [];
-const levelRe = /id\s*=\s*"([a-z]+)"[\s\S]*?nodes\s*=\s*\{([\s\S]*?)\n    \},/g;
-let lm;
-while ((lm = levelRe.exec(src)) !== null) {
-  const [, id, body] = lm;
+for (let b = 0; b < bounds.length; b++) {
+  const id = bounds[b][1];
+  const from = bounds[b].index;
+  const to = b + 1 < bounds.length ? bounds[b + 1].index : src.length;
+  const slice = src.slice(from, to);
+  // Gate-only boards live past the end of the campaign and are built to
+  // isolate one rule, not to be played: a single mound is exactly right
+  // for them and would fail every connectivity check here.
+  if (id.startsWith('gate')) continue;
+  const nm0 = slice.match(/nodes\s*=\s*\{([\s\S]*?)\n    \},/);
+  if (!nm0) continue;
+  const body = nm0[1];
   const nodes = [];
   const nodeRe = /\{\s*kind\s*=\s*"(\w+)"\s*,\s*x\s*=\s*(-?\d+)\s*,\s*y\s*=\s*(-?\d+)([^}]*)\}/g;
   let nm;

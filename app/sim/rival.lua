@@ -30,7 +30,20 @@ M.cfg = {
   -- forever, converting the army into production it had no way to spend.
   -- Above `armyAt` it saves instead, which is what turns production into
   -- an attack.
-  queenAt   = 14,     -- ants at a mound before it spends ten on a queen
+  --
+  -- TEN, AND IT MUST NOT EXCEED THE SATURATION CAP. This was 14, which
+  -- was fine while a mound could grow without limit -- but a mound now
+  -- stops laying at ten workers per queen, so a one-queen mound can
+  -- never reach fourteen by growing and the colony never queens again.
+  -- The whole war map deadlocked on that one number: every side frozen
+  -- at its opening garrison, no second queen anywhere, nobody ever
+  -- clearing the threshold to attack. A threshold above the ceiling is
+  -- not a slow rival, it is a stopped one.
+  queenAt   = 10,     -- ants at a mound before it spends ten on a queen
+  -- Below this it goes foraging instead of expanding or fighting. A
+  -- colony that fights while its stores are empty wins the mound and
+  -- then starves on it.
+  foodLow   = 18,
   armyAt    = 26,     -- total ants above which it stops queening and fights
 }
 
@@ -72,17 +85,62 @@ function M.update(r, world, agents, dt, sim)
     local n = h.node
     if wantQueens and h.ants >= M.cfg.queenAt
        and #(n.queens or {}) < (n.maxQueens or 3) then
-      local spent = 0
-      for k = agents.n, 1, -1 do
-        if spent >= 10 then break end
-        local ant = agents.pool[k]
-        if ant.at == n.id and ant.side == r.side then
-          A.kill(agents, k)
-          spent = spent + 1
-        end
+      -- Through the shared spend, so a rival's laden workers bank their
+      -- food exactly as the player's do. Two colonies playing by
+      -- different accounting rules is how an opponent stops being one.
+      local _, banked = A.spend(agents, n.id, r.side, 10)
+      if sim and banked > 0 then
+        require("sim.init").addFood(sim, r.side, banked)
       end
       n.queens[#n.queens + 1] = { layTimer = 0 }
       return
+    end
+  end
+
+  -- 1b. EAT. A colony with an empty pantry is a colony that has stopped,
+  --     and it stops silently -- the mounds are still there, the queens
+  --     are still sitting on them, and nothing grows ever again. So when
+  --     the stores run low it goes and gets food, which is the same move
+  --     the player makes and for the same reason.
+  --
+  --     It walks to the nearest place with something in it. Deliberately
+  --     not the richest: an opponent that always makes the optimal
+  --     foraging choice is doing arithmetic the player cannot see.
+  -- `sim` here is the sim STATE, not the module (see the signature); the
+  -- module is fetched at call time, which is also how the queen branch
+  -- above reaches it without a require cycle.
+  local SIM = require("sim.init")
+  if sim and SIM.foodOf(sim, r.side) < M.cfg.foodLow then
+    local bestL, bestFrom, bestD = nil, nil, math.huge
+    for i = 1, #mine do
+      local h = mine[i]
+      if h.ants - M.cfg.keep > 1 then
+        for j = 1, #(world.locs or {}) do
+          local L = world.locs[j]
+          -- Somewhere with food, that is not somebody else's, and that
+          -- is not guarded by something it would only feed.
+          if (L.items or 0) > 0 and (L.guard or 0) == 0
+             and (L.owner == nil or L.owner == r.side)
+             and W.inRange(world, h.node, L) then
+            local d = W.dist(h.node, L)
+            if d < bestD then bestL, bestFrom, bestD = L, h, d end
+          end
+        end
+      end
+    end
+    if bestL then
+      -- Send only as many as there is food to pick up: one ant carries
+      -- one item, so a column of thirty at a patch of four is
+      -- twenty-six ants standing about where the enemy can see them.
+      local want = math.min(bestFrom.ants - M.cfg.keep, bestL.items)
+      if want > 0 and A.send(agents, bestFrom.node.id, bestL.id,
+                             want, r.side) > 0 then
+        if M.debug then
+          print(string.format("@rival %s forages %s with %d", r.side,
+                              bestL.id, want))
+        end
+        return
+      end
     end
   end
 
@@ -113,85 +171,85 @@ function M.update(r, world, agents, dt, sim)
     return
   end
 
-  -- 2b. REINFORCE THE FRONT. Without this the colony has no way to
-  --     concentrate: every ant stays on the mound whose queen laid it, so
-  --     the capital sits on thirty while the border mound facing the enemy
-  --     has four and can never clear the attack threshold. Two rival
-  --     colonies 550 units apart -- easily in reach -- therefore stared at
-  --     each other indefinitely.
+  -- 2b/3. MASS, THEN STRIKE.
   --
-  --     A front mound is one that can SEE something hostile. Ants walk
-  --     from the fattest rear mound to the thinnest front one, which is
-  --     the same thing a player does by hand.
-  local front, rear, frontAnts, rearAnts = nil, nil, math.huge, -1
+  --     It picks the weakest thing it can reach, names the mound of its
+  --     own that faces it as the staging ground, and walks ants there
+  --     from everywhere else until that one mound can win -- then throws
+  --     them. That is what a player does before an assault, and it is the
+  --     only way anybody attacks anything now that mounds have a
+  --     ceiling.
+  --
+  --     THE OLD RULE EQUALISED INSTEAD OF CONCENTRATING: ants walked from
+  --     the fattest rear mound to the THINNEST front one, which spreads a
+  --     colony evenly along its border. That was right while a mound
+  --     could grow without limit -- somebody eventually got fat enough to
+  --     attack on their own -- but production now stops at ten workers
+  --     per queen, so every mound sits at ten, the threshold needs closer
+  --     to forty, and an army of a hundred and eighty ants stares at a
+  --     home mound it outnumbers six to one for the entire match. Spread
+  --     evenly, a big colony is a big colony of small garrisons.
+  local tgt, staging, tgtDef = nil, nil, math.huge
   for i = 1, #mine do
     local h = mine[i]
-    local facing = false
     for j = 1, #world.nodes do
       local t = world.nodes[j]
       if t.owner and t.owner ~= r.side and W.inRange(world, h.node, t) then
-        facing = true
-        break
+        local def = A.garrison(agents, t.id, t.owner) + (t.energy or 0)
+        -- Weakest target wins; ties break toward the mound that already
+        -- has the most ants standing on it, so the staging ground does
+        -- not wander from tick to tick.
+        if def < tgtDef or (t == tgt and h.ants > (staging and staging.ants or -1)) then
+          tgt, staging, tgtDef = t, h, def
+        end
       end
     end
-    if facing then
-      if h.ants < frontAnts then front, frontAnts = h, h.ants end
-    else
-      if h.ants > rearAnts then rear, rearAnts = h, h.ants end
-    end
-  end
-  -- Only worth walking if the rear can actually spare a useful column.
-  if front and rear and rearAnts - M.cfg.keep >= 4 and rearAnts > frontAnts + 3 then
-    A.send(agents, rear.node.id, front.node.id,
-           rearAnts - M.cfg.keep, r.side)
-    if M.debug then
-      print(string.format("@rival %s reinforces %s from %s with %d", r.side,
-            front.node.id, rear.node.id, math.floor(rearAnts - M.cfg.keep)))
-    end
-    return
   end
 
-  -- 3. ATTACK, but only with the numbers. It looks for the weakest thing
-  --    it can reach and only commits when it has a real margin, so a
-  --    player who keeps a garrison is genuinely safer -- which is what
-  --    makes garrisoning a decision.
-  local tgt, from, tgtScore = nil, nil, math.huge
-  for i = 1, #mine do
-    local h = mine[i]
-    local spare = h.ants - M.cfg.keep
-    if spare > 3 then
-      for j = 1, #world.nodes do
-        local t = world.nodes[j]
-        if t.owner and t.owner ~= r.side
-           and W.inRange(world, h.node, t) then
-          local def = A.garrison(agents, t.id, t.owner) + (t.energy or 0)
-          if spare > def * M.cfg.attackAt and def < tgtScore then
-            tgt, from, tgtScore = t, h, def
-          end
+  if tgt and staging then
+    local need = tgtDef * M.cfg.attackAt
+    local spare = staging.ants - M.cfg.keep
+    if spare > need and spare > 3 then
+      A.send(agents, staging.node.id, tgt.id, spare, r.side)
+      print(string.format("@rival %s attacks %s with %d", r.side, tgt.id,
+                          math.floor(spare)))
+      return
+    end
+    -- NOT ENOUGH YET: walk another column in. The donor is the fattest
+    -- mound that is not the staging ground itself, and it keeps back
+    -- `keep` so nowhere is left completely empty behind the front.
+    local donor, donorAnts = nil, -1
+    for i = 1, #mine do
+      local h = mine[i]
+      if h.node ~= staging.node and h.ants > donorAnts then
+        donor, donorAnts = h, h.ants
+      end
+    end
+    if donor and donorAnts - M.cfg.keep >= 4 then
+      local col = donorAnts - M.cfg.keep
+      -- The network must actually connect them; a donor cut off behind
+      -- enemy ground cannot help and must not silently swallow the tick.
+      if A.send(agents, donor.node.id, staging.node.id, col, r.side) > 0 then
+        if M.debug then
+          print(string.format("@rival %s masses %d at %s for %s (need %d, have %d)",
+                r.side, math.floor(col), staging.node.id, tgt.id,
+                math.floor(need), math.floor(spare)))
         end
+        return
       end
     end
   end
-  if tgt then
-    A.send(agents, from.node.id, tgt.id, from.ants - M.cfg.keep, r.side)
-    print(string.format("@rival %s attacks %s with %d", r.side, tgt.id,
-                        math.floor(from.ants - M.cfg.keep)))
-  elseif M.debug then
-    -- Why NOT: the reason an AI does nothing is invisible otherwise, and
-    -- tuning constants blind is how this stayed broken.
-    local best = "none-in-range"
-    for i = 1, #mine do
-      local h = mine[i]
-      for j = 1, #world.nodes do
-        local t = world.nodes[j]
-        if t.owner and t.owner ~= r.side and W.inRange(world, h.node, t) then
-          best = string.format("%s spare=%d vs %s def=%d", h.node.id,
-            math.floor(h.ants - M.cfg.keep), t.id,
-            math.floor(A.garrison(agents, t.id, t.owner) + (t.energy or 0)))
-        end
-      end
+
+  -- Why NOT: the reason an AI does nothing is invisible otherwise, and
+  -- tuning constants blind is how this stayed broken.
+  if M.debug then
+    if tgt and staging then
+      print(string.format("@rival %s idle: staging %s has %d vs %s def=%d",
+        r.side, staging.node.id, math.floor(staging.ants - M.cfg.keep),
+        tgt.id, math.floor(tgtDef)))
+    else
+      print("@rival " .. r.side .. " idle: none-in-range")
     end
-    print("@rival " .. r.side .. " idle: " .. best)
   end
 end
 

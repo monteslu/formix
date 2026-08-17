@@ -27,6 +27,20 @@ await d.step(60);
 R.check('queen exists after Y', mound[home].queens === 1, `queens=${mound[home].queens}`);
 R.check('queen cost exactly 10 ants', mound[home].g === 2, `garrison=${mound[home].g}`);
 
+// ---- feed her ----
+//
+// TEMPORARY SCAFFOLDING, and it should be deleted. A queen eats one food
+// per larva, the colony starts with none, and nothing on this board can
+// be foraged yet -- so without a grant she sits there and every
+// assertion below fails for a reason that has nothing to do with queens.
+//
+// When Gather gets its aphid cluster this becomes what it should be: walk
+// ants to the aphids, walk them home, watch her lay. If you are reading
+// this after locations shipped, that is the edit to make.
+await d.press('select', 6);          // developer overlay: unlocks the grant
+await d.hold(['select', 'y'], 8);    // SELECT+Y grants 20 food
+await d.press('select', 6);          // overlay back off
+
 // ---- she lays larvae ----
 await d.step(600);
 ({ mound } = await d.inspect());

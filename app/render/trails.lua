@@ -11,6 +11,8 @@
 
 local menu = require("ui.menu")
 
+local WW = require("sim.world")
+
 local M = {}
 
 local SEGMENTS = 14        -- per edge; enough to curve without wasting fill
@@ -212,8 +214,8 @@ function M.draw(snap, vp, intents)
   -- The live drag: a rubber band from the node the finger started on. Drawn
   -- here so it reads as a road being laid rather than a UI line.
   local fromId, px, py = intents.dragLine()
-  if fromId and world.node[fromId] then
-    local a = world.node[fromId]
+  if fromId and WW.site(world, fromId) then
+    local a = WW.site(world, fromId)
     local ax, ay = vp.worldToScreen(a.x, a.y)
     g.setColor(0.5, 0.95, 0.6, 0.55)
     g.setLineWidth(3)
@@ -224,8 +226,8 @@ function M.draw(snap, vp, intents)
   -- The pad's pending selection gets the same treatment toward the cursor.
   if intents.selected and intents.cursor.node and
      intents.selected ~= intents.cursor.node then
-    local a = world.node[intents.selected]
-    local b = world.node[intents.cursor.node]
+    local a = WW.site(world, intents.selected)
+    local b = WW.site(world, intents.cursor.node)
     if a and b then
       local ax, ay = vp.worldToScreen(a.x, a.y)
       local bx, by = vp.worldToScreen(b.x, b.y)

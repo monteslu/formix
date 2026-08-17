@@ -13,13 +13,23 @@
 
 local M = {}
 
--- Same three readings as the map overlay, so a node means the same thing
--- here as it does out there.
+-- Same readings as the map overlay, so a node means the same thing here
+-- as it does out there.
+--
+-- IT GATES ON `seen`, NOT ON `discovered`. `discovered` belonged to the
+-- old fog and nothing in the live sim has set it for a long time, so
+-- every loop here was skipping every mound and the panel drew an empty
+-- box in the corner of the screen -- a minimap of nothing, which is
+-- exactly as useless as no minimap and takes up the same room. The fog
+-- is still honoured: `seen` says the SHAPE of the field is never hidden,
+-- and `held` below is what decides whether a dot admits who is on it.
 local COL = {
   you     = { 0.45, 0.95, 0.55 },
   them    = { 0.95, 0.35, 0.30 },
   open    = { 0.92, 0.86, 0.55 },
   food    = { 0.60, 0.78, 0.92 },
+  -- Somewhere with something to eat, once you have been there.
+  forage  = { 0.90, 0.78, 0.36 },
 }
 
 -- World bounds of everything DISCOVERED, so the minimap grows with what
@@ -31,7 +41,7 @@ local function bounds(world)
   local any = false
   for i = 1, #world.nodes do
     local n = world.nodes[i]
-    if n.discovered then
+    if n.seen then
       any = true
       if n.x < x0 then x0 = n.x end
       if n.y < y0 then y0 = n.y end
@@ -84,23 +94,23 @@ function M.draw(snap, vp)
   g.setColor(0.04, 0.06, 0.05, 0.72)
   g.rectangle("fill", px, py, pw, ph, vp.u(10))
 
-  -- Edges first, so nodes sit on top of their connections.
-  g.setColor(0.35, 0.45, 0.35, 0.5)
-  g.setLineWidth(math.max(1, vp.u(2)))
-  for i = 1, #world.edges do
-    local e = world.edges[i]
-    local a, b = world.node[e.a], world.node[e.b]
-    if a.discovered and b.discovered then
-      local ax, ay = toMap(a.x, a.y)
-      local bxp, byp = toMap(b.x, b.y)
-      g.line(ax, ay, bxp, byp)
-    end
-  end
-  g.setLineWidth(1)
+  -- THERE ARE NO EDGES TO DRAW. This used to walk `world.edges` and
+  -- stroke a line per connection, from a build where the map really was
+  -- a stored graph. Reach is computed from positions now -- world.lua
+  -- says so at the top, and the ring on the main map IS the rule -- so
+  -- the table has been gone for a long time.
+  --
+  -- It never crashed because it was never reached: the loop above gated
+  -- on `discovered`, which nothing has set in just as long, so bounds()
+  -- returned nil and the whole panel bailed out one line earlier. Two
+  -- dead things propping each other up, and fixing the first one turned
+  -- the second into `attempt to get length of a nil value (field
+  -- 'edges')` on every frame. Worth remembering next time a "safe"
+  -- revival of dormant code looks free.
 
   for i = 1, #world.nodes do
     local n = world.nodes[i]
-    if n.discovered then
+    if n.seen then
       local x, y = toMap(n.x, n.y)
       -- SAME FOG AS THE MAP: a mound you have never stood on shows as
       -- unclaimed here whatever is really on it. The minimap is the one
@@ -127,6 +137,23 @@ function M.draw(snap, vp)
         if pxx then g.polygon("fill", x, y, pxx, pyy, qx, qy) end
         pxx, pyy = qx, qy
       end
+    end
+  end
+
+  -- FOOD, as small diamonds -- a different SHAPE, not just a different
+  -- colour, because the one question this panel answers at a glance is
+  -- "where is my empire weak" and a fourth colour of dot does not
+  -- survive being glanced at. Grey until visited, like everything else.
+  for i = 1, #(world.locs or {}) do
+    local l = world.locs[i]
+    if l.seen then
+      local x, y = toMap(l.x, l.y)
+      local r = vp.u(4)
+      local c = l.observed and ((l.owner == "you") and COL.you
+                            or l.owner and COL.them or COL.forage)
+                or { 0.42, 0.44, 0.46 }
+      g.setColor(c[1], c[2], c[3], l.observed and 0.95 or 0.6)
+      g.polygon("fill", x, y - r, x + r, y, x, y + r, x - r, y)
     end
   end
 

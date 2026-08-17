@@ -19,8 +19,23 @@ function M.init(S)
   -- `app/startlevel` marker opens somewhere other than Gather, and a gate
   -- that assumed the usual opening board would otherwise just report
   -- baffling failures -- which is exactly what happened once.
-  print(string.format("@boot seed=%d mounds=%d ants=%d level=%s",
-    S.seed, #S.world.nodes, S.agents.n, tostring(S.levelId or "open")))
+  -- QUEENS AND FOOD ARE PART OF THE BOOT REPORT now that a colony can
+  -- starve. Whether a board is survivable from its first frame is a
+  -- function of exactly these three numbers, and a gate that had to play
+  -- the level to find out would be asserting on its own play instead.
+  local sim = require("sim.init")
+  local queens, mine = 0, 0
+  for i = 1, #S.world.nodes do
+    local n = S.world.nodes[i]
+    if n.owner == A.YOU then queens = queens + #(n.queens or {}) end
+  end
+  for i = 1, S.agents.n do
+    if S.agents.pool[i].side == A.YOU then mine = mine + 1 end
+  end
+  print(string.format(
+    "@boot seed=%d mounds=%d ants=%d level=%s mine=%d queens=%d food=%d",
+    S.seed, #S.world.nodes, S.agents.n, tostring(S.levelId or "open"),
+    mine, queens, sim.foodOf(S, A.YOU)))
 end
 
 function M.noteIntent(it, ok)
@@ -46,13 +61,28 @@ function M.reportMounds(S)
     -- assert an attack against.
     local hold = n.owner or "you"
     print(string.format(
-      "@mound %s %s g=%d gi=%d fg=%d q=%d/%d energy=%.0f reach=%.0f seen=%s brood=%d",
+      "@mound %s %s g=%d gi=%d fg=%d q=%d/%d energy=%.0f reach=%.0f seen=%s brood=%d held=%s obs=%s",
       n.id, tostring(n.owner), A.garrison(S.agents, n.id, "you"),
       A.garrisonIncoming(S.agents, n.id, "you"),
       A.garrison(S.agents, n.id, hold),
       n.queens and #n.queens or 0, n.maxQueens or 0,
       n.energy or 0, W.reach(n), tostring(n.seen),
-      n.brood and #n.brood or 0))
+      n.brood and #n.brood or 0, tostring(n.held or false),
+      tostring(n.observed or false)))
+  end
+end
+
+-- Every location: what it is, who holds it, how much is left in it. The
+-- kind is reported even when the fog is hiding it from the PLAYER -- a
+-- gate has to be able to assert that the screen does not show what this
+-- line says.
+function M.reportLocs(S)
+  for i = 1, #(S.world.locs or {}) do
+    local l = S.world.locs[i]
+    print(string.format(
+      "@loc %s %s %s items=%d/%d value=%d guard=%d observed=%s held=%s",
+      l.id, l.kind, tostring(l.owner), l.items or 0, l.cap or 0,
+      l.value or 0, l.guard or 0, tostring(l.observed), tostring(l.held)))
   end
 end
 
@@ -61,6 +91,14 @@ function M.reportNodes(S, vp)
     local n = S.world.nodes[i]
     local x, y = vp.worldToScreen(n.x, n.y)
     print(string.format("@node %s %d %d", n.id,
+                        math.floor(x + 0.5), math.floor(y + 0.5)))
+  end
+  -- Locations are drag targets like anything else, so a gate needs their
+  -- screen positions to play the game the way a player does.
+  for i = 1, #(S.world.locs or {}) do
+    local l = S.world.locs[i]
+    local x, y = vp.worldToScreen(l.x, l.y)
+    print(string.format("@node %s %d %d", l.id,
                         math.floor(x + 0.5), math.floor(y + 0.5)))
   end
 end
@@ -76,9 +114,16 @@ function M.reportUI(vp)
   print(string.format("@ui menu=%s row=%d cursor=%s selected=%s frac=%.2f",
     tostring(menu.open), menu.index, tostring(intents.cursor.node),
     tostring(intents.selected), intents.fraction or 0))
+  -- THE CAMERA, which no pixel assertion can pin down: a view that panned
+  -- and a view that did not look identical in a screenshot of open ground.
+  if vp then
+    print(string.format("@cam x=%.1f y=%.1f zoom=%.4f", vp.cam.x, vp.cam.y,
+                        vp.cam.zoom))
+  end
 end
 
 function M.command(S, what)
+  local sim = require("sim.init")
   if what == "overlay" then
     M.overlay = not M.overlay
     M.wantReport = M.overlay
@@ -86,6 +131,34 @@ function M.command(S, what)
   elseif what == "pause" then
     S.paused = not S.paused
     print("@dbg paused=" .. tostring(S.paused))
+  elseif what == "feed" or what == "starve" then
+    -- INSTRUMENTS, NOT MECHANICS.
+    --
+    -- The player never handles food: queens eat it themselves and there
+    -- is no way to spend, stockpile or withhold it by hand. These two
+    -- exist so a GATE can set up a fed or empty pantry before anything
+    -- that forages has been built -- otherwise the rule that hunger
+    -- stops a queen laying could not be proved until three phases later.
+    --
+    -- Both are locked behind the developer overlay so no stray press in
+    -- ordinary play can reach them. A cheat one button-combination away
+    -- from a real player is a cheat that will happen by accident.
+    if not M.overlay then
+      print("@dbg refused " .. what .. " (overlay off)")
+      return
+    end
+    if what == "feed" then
+      sim.addFood(S, A.YOU, 20)
+      print(string.format("@food you=%d granted=20", sim.foodOf(S, A.YOU)))
+    else
+      S.food = S.food or {}
+      S.food[A.YOU] = 0
+      print("@food you=0 starved")
+    end
+  elseif what == "food" then
+    print(string.format("@food you=%d carried=%d dead=%s",
+      sim.foodOf(S, A.YOU), A.carried(S.agents, A.YOU),
+      tostring(S.dead and S.dead[A.YOU] or false)))
   end
 end
 
@@ -115,11 +188,27 @@ function M.update(S, dt)
     queens = queens + (nd.queens and #nd.queens or 0)
     if nd.seen then seen = seen + 1 end
   end
+  local locs, locsMine, items = 0, 0, 0
+  for i = 1, #(S.world.locs or {}) do
+    local l = S.world.locs[i]
+    locs = locs + 1
+    if l.owner == "you" then locsMine = locsMine + 1 end
+    items = items + (l.items or 0)
+  end
+  local sim = require("sim.init")
   print(string.format(
     '@m {"t":%.2f,"ants":%d,"mine":%d,"theirs":%d,"moving":%d,' ..
-    '"owned":%d,"queens":%d,"seen":%d,"mounds":%d,"phash":%d}',
+    '"owned":%d,"queens":%d,"seen":%d,"mounds":%d,"phash":%d,' ..
+    '"food":%d,"carried":%d,"dead":%s,' ..
+    '"locs":%d,"locsMine":%d,"items":%d,"picked":%d,"delivered":%d,' ..
+    '"eaten":%d}',
     S.time, n, mine, theirs, moving, owned, queens, seen,
-    #S.world.nodes, A.positionHash(S.agents)))
+    #S.world.nodes, A.positionHash(S.agents),
+    sim.foodOf(S, "you"), A.carried(S.agents, "you"),
+    tostring(S.dead and S.dead["you"] or false),
+    locs, locsMine, items,
+    S.agents.pickedBy["you"] or 0, S.agents.deliveredBy["you"] or 0,
+    sim.eatenBy(S, "you")))
 end
 
 function M.draw(S, vp, intents)
@@ -128,6 +217,7 @@ function M.draw(S, vp, intents)
     M.wantReport = false
     M.reportNodes(S, vp)
     M.reportMounds(S)
+    M.reportLocs(S)
   end
   M.reportUI(vp)
 end

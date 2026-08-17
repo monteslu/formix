@@ -38,8 +38,19 @@ local ptr = {}
 for i = 0, PTR_SLOTS - 1 do
   ptr[i] = { active = false, down = false, prevDown = false,
              x = 0, y = 0, downX = 0, downY = 0, startNode = nil,
-             dragging = false }
+             dragging = false,
+             -- A press that landed on empty ground drags the CAMERA rather
+             -- than an army. `lastX/Y` is where it was last frame, because
+             -- panning is a per-frame delta and not a total displacement.
+             panning = false, lastX = 0, lastY = 0 }
 end
+
+-- PINCH: two contacts stop being a send and become a lens.
+--
+-- `d0` and `zoom0` are the distance and zoom when the second finger landed;
+-- everything else is derived per frame. Held here rather than on a slot
+-- because a pinch belongs to the PAIR, and either finger lifting ends it.
+local pinch = { active = false, d0 = 0, zoom0 = 1, cx = 0, cy = 0 }
 
 local frame = 0
 -- Whether the stick is currently outside the deadzone. It must come back
@@ -47,6 +58,14 @@ local frame = 0
 local stickHeld = false
 local DRAG_SLOP = 12
 local STICK_DEAD = 0.4
+-- The right stick pans CONTINUOUSLY, so it can afford a smaller deadzone
+-- than the edge-triggered cursor stick above -- there is no one-push-one-step
+-- rule to protect here, only drift to reject.
+local PAN_DEAD = 0.22
+-- World units per second at zoom 1. Divided by zoom at the call site, so
+-- the apparent speed on screen is constant.
+local PAN_SPEED = 900
+local padPrevR3 = false
 
 M.padUsed = false
 M.pointerUsed = false
@@ -76,6 +95,13 @@ local function fractionFromDrag(dist, vpu)
 end
 M.fractionFromDrag = fractionFromDrag
 
+-- THE CANDIDATE SET INCLUDES LOCATIONS, and it has to. Everything about
+-- a location is reachable through the ordinary send -- the network
+-- carries you there, the fog hides its kind, an arrival claims it -- but
+-- none of that is worth anything if the thing cannot be POINTED AT.
+-- Leaving them out of here (and out of pickDirectional below) makes food
+-- visible on the map and untouchable by either input device, which is
+-- the same class of bug as the cursor that could not leave its mound.
 local function pickNode(world, wx, wy, radius)
   local best, bestD = nil, radius * radius
   for i = 1, #world.nodes do
@@ -84,6 +110,14 @@ local function pickNode(world, wx, wy, radius)
       local dx, dy = n.x - wx, n.y - wy
       local d = dx * dx + dy * dy
       if d < bestD then best, bestD = n.id, d end
+    end
+  end
+  for i = 1, #(world.locs or {}) do
+    local l = world.locs[i]
+    if l.seen then
+      local dx, dy = l.x - wx, l.y - wy
+      local d = dx * dx + dy * dy
+      if d < bestD then best, bestD = l.id, d end
     end
   end
   return best
@@ -121,15 +155,22 @@ end
 -- distance ACROSS it. Near-and-straight-ahead wins; far wins only when
 -- nothing is nearer; and something 90 degrees off never wins at all.
 local function pickDirectional(world, fromId, sx, sy)
-  local from = world.node[fromId]
+  local W = require("sim.world")
+  local from = W.site(world, fromId)
   if not from then return world.homeId end
   local len = math.sqrt(sx * sx + sy * sy)
   if len < 1e-4 then return nil end
   local nx, ny = sx / len, sy / len
 
+  -- Mounds and locations are one candidate list here: the cursor is a
+  -- SPATIAL cursor, and anything you can see you must be able to look at.
+  local cand = {}
+  for i = 1, #world.nodes do cand[#cand + 1] = world.nodes[i] end
+  for i = 1, #(world.locs or {}) do cand[#cand + 1] = world.locs[i] end
+
   local best, bestScore = nil, math.huge
-  for i = 1, #world.nodes do
-    local n = world.nodes[i]
+  for i = 1, #cand do
+    local n = cand[i]
     if n ~= from and n.seen then
       local dx, dy = n.x - from.x, n.y - from.y
       -- Split the offset into "along the direction pressed" and "across
@@ -288,18 +329,68 @@ local function updatePad(world, agents)
     end
   end
 
-  -- QUANTITY IS ON THE SHOULDERS, in every state. It used to sit on
-  -- up/down while an order was being composed, which stole half the d-pad
-  -- from aiming: pressing up moved nothing and silently changed the count
-  -- instead, so the cursor read as broken and inverted. A direction should
-  -- always mean "look that way".
+  -- ── the shoulders do double duty, on a visible boundary ──────────────
+  --
+  -- QUANTITY while an order is being composed; ZOOM the rest of the time.
+  --
+  -- Quantity cannot go anywhere else. It used to sit on up/down, which
+  -- stole half the d-pad from aiming: pressing up moved nothing and
+  -- silently changed the count instead, so the cursor read as broken and
+  -- inverted. A direction must always mean "look that way".
+  --
+  -- And zoom has nowhere else either: this pad ABI has no triggers, and the
+  -- right stick is the camera. Console RTS convention puts zoom on triggers
+  -- or a stick axis, so shoulders are the road less travelled -- which is
+  -- why the zoom they give is DISCRETE RUNGS (viewport.ZOOM_STEPS). A slip
+  -- in the wrong mode then costs exactly one press to undo, and the mode
+  -- itself is unmissable: composing an order puts a gauge on screen.
+  local composing = M.selected ~= nil
   if pressed("r") then
-    fracIndex = math.min(#FRACTIONS, fracIndex + 1)
-    M.fraction = FRACTIONS[fracIndex]
+    if composing then
+      fracIndex = math.min(#FRACTIONS, fracIndex + 1)
+      M.fraction = FRACTIONS[fracIndex]
+    else
+      emit("zoom", { step = 1 })
+    end
   elseif pressed("l") then
-    fracIndex = math.max(1, fracIndex - 1)
-    M.fraction = FRACTIONS[fracIndex]
+    if composing then
+      fracIndex = math.max(1, fracIndex - 1)
+      M.fraction = FRACTIONS[fracIndex]
+    else
+      emit("zoom", { step = -1 })
+    end
   end
+
+  -- THE RIGHT STICK IS THE CAMERA, and the cursor is not on it.
+  --
+  -- Loosely coupled, the way Civilization VI does it -- the one shipped
+  -- console strategy game with this same shape (a discrete snapping cursor
+  -- plus a free camera): panning never moves the cursor, and moving the
+  -- cursor pulls the view back to it. Divided by zoom so a stick-second
+  -- sweeps the same fraction of the SCREEN however far out you are.
+  do
+    local rx = love.pad.axis(1, "rightx") or 0
+    local ry = love.pad.axis(1, "righty") or 0
+    if math.abs(rx) < PAN_DEAD then rx = 0 end
+    if math.abs(ry) < PAN_DEAD then ry = 0 end
+    if rx ~= 0 or ry ~= 0 then
+      local v = PAN_SPEED / 60 / vp.cam.zoom
+      emit("pan", { dx = rx * v, dy = ry * v })
+      -- The auto-nudge would fight this: it pulls the view toward the
+      -- cursor, so panning away from an off-screen cursor would be a tug of
+      -- war the player reads as a broken stick. Suspended while the stick
+      -- is deflected; the next cursor hop re-enables it.
+      M.camHeld = true
+    end
+  end
+
+  -- R3 RESETS THE VIEW: default zoom, centred on the cursor. Halo Wars and
+  -- Age of Empires II both ship this and it costs one button -- the "where
+  -- am I" way back after panning somewhere featureless.
+  if padDown("r3") and not padPrevR3 then
+    emit("zoom", { reset = true })
+  end
+  padPrevR3 = padDown("r3")
 
   if M.selected then
     -- ORDER IN PROGRESS: any direction aims, A sends, B cancels.
@@ -329,7 +420,9 @@ local function updatePad(world, agents)
       if t then M.cursor.node = t; emit("select", { node = t }) end
     end
     if pressed("a") and M.cursor.node then
-      local n = world.node[M.cursor.node]
+      -- A location you hold is a place you can pick ants UP from, just
+      -- like a mound: ants standing on a grain patch are ants.
+      local n = W.site(world, M.cursor.node)
       if n and n.owner == A.YOU
          and A.garrison(agents, n.id, A.YOU) > 0 then
         M.selected = M.cursor.node
@@ -348,17 +441,46 @@ local function updatePad(world, agents)
     end
   end
 
+  -- SELECT IS A MODIFIER for the debug commands, the same way it already
+  -- guards START. A gate cannot type, so the only way to reach into the
+  -- sim from outside is a button combination -- and these must be checked
+  -- BEFORE the plain Y/X handlers or one press would both feed the colony
+  -- and raise a queen.
+  if padNow.select then
+    if pressed("y") then emit("debug", { what = "feed" });   M.comboUsed = true end
+    if pressed("x") then emit("debug", { what = "starve" }); M.comboUsed = true end
+    if pressed("b") then emit("debug", { what = "food" });   M.comboUsed = true end
+    -- Everything else is swallowed while the modifier is held, so a
+    -- combo never also fires the unmodified action underneath it.
+    return
+  end
+
   -- Y raises a queen, X spends on the mound's growth stat: both turn ants
   -- into permanent capability, which is what makes them a currency rather
   -- than only an army.
-  if pressed("y") and M.cursor.node then
+  -- NOT ON A PATCH OF GRAIN. The sim refuses these on a location anyway
+  -- (it has no queens table to grow), but a button that does nothing and
+  -- says nothing is this file's oldest enemy -- so the refusal is spoken
+  -- here rather than swallowed silently downstream.
+  if (pressed("y") or pressed("x")) and M.cursor.node
+     and world.loc and world.loc[M.cursor.node] then
+    M.refused = "not a mound"
+    M.refusedFrames = 110
+  elseif pressed("y") and M.cursor.node then
     emit("queen", { node = M.cursor.node })
-  end
-  if pressed("x") and M.cursor.node then
+  elseif pressed("x") and M.cursor.node then
     emit("upgrade", { node = M.cursor.node, stat = "growStat" })
   end
 
-  if pressed("select") then emit("debug", { what = "overlay" }) end
+  -- THE OVERLAY TOGGLES ON RELEASE, not on press, now that SELECT is also
+  -- a modifier: firing on press meant every debug combo toggled the
+  -- developer overlay on its way through, which changes what is drawn --
+  -- and a pixel gate that fed the colony would have been comparing
+  -- against a screen with the overlay up.
+  if padPrev.select and not padNow.select then
+    if not M.comboUsed then emit("debug", { what = "overlay" }) end
+    M.comboUsed = false
+  end
 end
 
 local function updatePointer(world, agents)
@@ -377,13 +499,48 @@ local function updatePointer(world, agents)
     ptr[i].down = false
   end
 
+  -- THE WHEEL: the mouse's zoom, and the reason the wasmcart ABI grew a
+  -- wheel field (v3.1). Anchored under the CURSOR, not the screen centre:
+  -- spinning the wheel while pointing at a far mound means "closer to
+  -- THAT", and having it slide away while the scale changed would be
+  -- visibly wrong.
+  --
+  -- Continuous, unlike the shoulder rungs -- a wheel is an analog input and
+  -- stepping it feels broken. One notch is a ~15% change either way.
+  if love.mouse.wheel then
+    local _, wdy = love.mouse.wheel()
+    if wdy and wdy ~= 0 then
+      local mx, my = love.mouse.getPosition()
+      emit("zoom", { f = 1 + wdy * 0.15, sx = mx, sy = my })
+    end
+  end
+
   -- Slot 0: the mouse.
+  --
+  -- READ THE RAW POINTER, NOT love.mouse.isDown. The prelude mirrors pad R
+  -- onto mouse button 1 as a convenience for pad-only hosts -- and that
+  -- mirror is poison here, because R is the zoom-out button.
+  --
+  -- The symptom was a delight to track down: pressing R to zoom injected a
+  -- phantom click wherever the mouse happened to rest. If that was over a
+  -- mound it silently PICKED IT UP, so the next A press -- which the player
+  -- meant as "select this" -- was read as "put it back down" and did
+  -- nothing visible. On a desktop it would also pan the view on every zoom
+  -- press, since a click on open ground is now a camera drag.
+  --
+  -- This game reads the pad directly and needs no mirror. wc.pointer(0)
+  -- gives the real button mask.
   do
     local p = ptr[0]
     local mx, my = love.mouse.getPosition()
     p.x, p.y = mx, my
     p.active = true
-    p.down = love.mouse.isDown(1) and true or false
+    local ok, _, _, buttons = pcall(wc.pointer, 0)
+    if ok and type(buttons) == "number" then
+      p.down = (buttons & 1) ~= 0
+    else
+      p.down = false
+    end
     if p.down then M.pointerUsed = true end
   end
 
@@ -403,17 +560,85 @@ local function updatePointer(world, agents)
     end
   end
 
+  -- ── PINCH, before anything else ──────────────────────────────────────
+  --
+  -- Two fingers down means the player wants the LENS, not the army. This is
+  -- checked ahead of the per-slot machine and takes both contacts out of it
+  -- entirely, which is the whole safety story: a second thumb landing while
+  -- the first is mid-drag CANCELS that drag rather than completing it.
+  --
+  -- Without the cancel, a palm brush or a slightly-early second finger
+  -- flings a garrison somewhere irreversible -- exactly the
+  -- one-stray-touch-away failure the tap/drag split was built to prevent,
+  -- arriving through a door nobody thought to lock.
+  do
+    local a, b = nil, nil
+    for i = 1, PTR_SLOTS - 1 do
+      if ptr[i].down then
+        if not a then a = ptr[i] elseif not b then b = ptr[i] end
+      end
+    end
+    if a and b then
+      local dx, dy = b.x - a.x, b.y - a.y
+      local d = math.sqrt(dx * dx + dy * dy)
+      local cx, cy = (a.x + b.x) * 0.5, (a.y + b.y) * 0.5
+      M.camHeld = true
+      if not pinch.active then
+        pinch.active = true
+        pinch.d0 = math.max(1, d)
+        pinch.zoom0 = vp.cam.zoom
+        pinch.cx, pinch.cy = cx, cy
+        -- Both contacts stop being gestures. Anything either of them had
+        -- started is abandoned, selection included when one of them made
+        -- it.
+        for _, p in ipairs({ a, b }) do
+          if M.selected and p.startNode == M.selected then M.selected = nil end
+          p.startNode, p.dragging, p.panning = nil, false, false
+        end
+      else
+        -- Scale about the CENTROID, and pan with it: the two compose, so a
+        -- pinch that also slides moves the map under the fingers.
+        local want = pinch.zoom0 * (d / pinch.d0)
+        local f = want / vp.cam.zoom
+        if f ~= 1 then emit("zoom", { f = f, sx = cx, sy = cy }) end
+        if cx ~= pinch.cx or cy ~= pinch.cy then
+          local s = vp.worldScale()
+          emit("pan", { dx = -(cx - pinch.cx) / s, dy = -(cy - pinch.cy) / s })
+        end
+      end
+      pinch.cx, pinch.cy = cx, cy
+    elseif pinch.active then
+      -- A finger lifted. The zoom stays where the pinch left it -- the
+      -- shoulder rungs are presets, not a cage.
+      pinch.active = false
+    end
+  end
+
   for i = 0, PTR_SLOTS - 1 do
     local p = ptr[i]
+    -- While pinching, the two contacts are the lens and nothing else.
+    --
+    -- Expressed as a GUARD rather than a `goto continue_slot`, which is the
+    -- shape that reads better and the shape that compiles: a goto aiming at
+    -- a label on the enclosing loop from inside a branch is not visible to
+    -- it, and the engine only says so at LOAD time -- every gate goes red at
+    -- once with `fetch failed` and nothing renders. See docs/ENGINE-NOTES.
+    local lensOnly = pinch.active and i >= 1 and p.down
+    if lensOnly then
+      p.startNode, p.dragging, p.panning = nil, false, false
+      p.lastX, p.lastY = p.x, p.y
+    end
     -- A lifted finger is down -> INACTIVE, not down -> up, so a slot that
     -- WAS down is processed one more time or its release is never seen.
-    if p.active or p.prevDown then
+    if (not lensOnly) and (p.active or p.prevDown) then
       local wx, wy = vp.screenToWorld(p.x, p.y)
       local pickR = 120 / vp.cam.zoom
 
       if p.down and not p.prevDown then
         p.downX, p.downY = p.x, p.y
+        p.lastX, p.lastY = p.x, p.y
         p.dragging = false
+        p.panning = false
         local menu = require("ui.menu")
         if menu.open then
           local row = menu.hitRow(M.vp, p.x, p.y)
@@ -439,6 +664,15 @@ local function updatePointer(world, agents)
         else
           local n = pickNode(world, wx, wy, pickR)
           p.startNode = n
+          -- NOTHING UNDER THE FINGER? Then this drag is the CAMERA.
+          --
+          -- The empty-ground case used to do nothing at all, which left the
+          -- view movable only by nudging the cursor at a screen edge -- the
+          -- documented weak point of console RTS cameras (Company of Heroes
+          -- on console is the cautionary case). Dragging the ground is what
+          -- every map does; a drag that starts ON a mound is still a send,
+          -- and that priority is not negotiable.
+          p.panning = (n == nil)
           if n then
             M.cursor.node = n
             emit("select", { node = n })
@@ -472,12 +706,30 @@ local function updatePointer(world, agents)
             -- handler needs to know, so a second tap on the same mound can
             -- put it down without a press-time deselect breaking drags.
             p.tapWasSelected = (M.selected == n)
+            if not nd then nd = world.loc and world.loc[n] end
             if nd and nd.owner == A.YOU then
               M.selected = n
               M.fraction = 1.0
             end
           end
         end
+
+      elseif p.down and p.prevDown and p.panning then
+        -- CAMERA DRAG. The ground follows the finger 1:1 -- the world moves
+        -- the opposite way to the screen delta, which is what makes it feel
+        -- like moving a map rather than driving a cursor.
+        --
+        -- The same DRAG_SLOP a send uses, so a sloppy tap on grass does not
+        -- twitch the view.
+        local moved = math.abs(p.x - p.downX) + math.abs(p.y - p.downY)
+        if moved > DRAG_SLOP then p.dragging = true end
+        if p.dragging then
+          local sc = vp.worldScale()
+          emit("pan", { dx = -(p.x - p.lastX) / sc,
+                        dy = -(p.y - p.lastY) / sc })
+          M.camHeld = true
+        end
+        p.lastX, p.lastY = p.x, p.y
 
       elseif p.down and p.prevDown and p.startNode then
         local moved = math.abs(p.x - p.downX) + math.abs(p.y - p.downY)
@@ -516,6 +768,7 @@ local function updatePointer(world, agents)
         end
         p.startNode = nil
         p.dragging = false
+        p.panning = false
       end
     end
   end
@@ -523,6 +776,16 @@ end
 
 function M.poll(world, viewport, agents)
   frame = frame + 1
+  -- IS THE PLAYER DRIVING THE CAMERA THIS FRAME? Set by the right stick, a
+  -- one-finger pan and a pinch alike; read by main.lua to suspend the
+  -- cursor-follow nudge.
+  --
+  -- It has to cover ALL THREE, not just the stick. The nudge pulls the view
+  -- toward the cursor at 10% per frame, so during a pinch it quietly dragged
+  -- the camera sideways -- about 6 units a frame, 60 over a gesture -- and
+  -- the anchored zoom the pinch had just computed came out visibly wrong.
+  -- Two mechanisms moving one camera is a fight; the manual one wins.
+  M.camHeld = false
   -- Kept so pendingOrder can ask the network whether the composed order
   -- is legal; it is called from the renderer, which has no world handle.
   M.world = world

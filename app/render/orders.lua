@@ -6,6 +6,8 @@
 -- that the send is invisible until ants start moving, which is exactly
 -- what made the previous build feel like nothing was under your control.
 
+local WW = require("sim.world")
+
 local M = {}
 
 -- TEXT NEVER GOES IN THE SCENE PASS. It is rasterised into the HDR target
@@ -37,7 +39,7 @@ function M.draw(snap, vp, intents)
   -- seconds of plain text at the mound is enough.
   if intents.refused and intents.refusedFrames and intents.refusedFrames > 0 then
     local id = intents.cursor and intents.cursor.node
-    local n = id and world.node[id]
+    local n = id and WW.site(world, id)
     if n then
       local sx, sy = vp.worldToScreen(n.x, n.y)
       local a = math.min(1, intents.refusedFrames / 30)
@@ -48,8 +50,8 @@ function M.draw(snap, vp, intents)
 
   -- ── the pending order ──
   local from, to, frac, count, legal = intents.pendingOrder(snap.agents)
-  if from and world.node[from] then
-    local a = world.node[from]
+  if from and WW.site(world, from) then
+    local a = WW.site(world, from)
     local ax, ay = vp.worldToScreen(a.x, a.y)
 
     -- A ring round the source that pulses: this is where the ants come
@@ -67,8 +69,8 @@ function M.draw(snap, vp, intents)
     end
     g.setLineWidth(1)
 
-    if to and to ~= from and world.node[to] then
-      local b = world.node[to]
+    if to and to ~= from and WW.site(world, to) then
+      local b = WW.site(world, to)
       local bx, by = vp.worldToScreen(b.x, b.y)
       -- THE ARROW. Its THICKNESS is the quantity, so how much you are
       -- committing is visible in the gesture rather than in a number.

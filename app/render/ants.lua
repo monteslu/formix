@@ -12,6 +12,8 @@
 
 local trails = require("render.trails")
 
+local WW = require("sim.world")
+
 local M = {}
 
 -- Body colours by role. Foragers are the default amber, nurses are paler
@@ -328,7 +330,7 @@ function M.draw(snap, vp)
     -- across the board.
     local vis = ant.side == "you"
     if not vis then
-      local at = ant.at and world.node[ant.at]
+      local at = ant.at and WW.site(world, ant.at)
       vis = at and at.held or false
     end
     if vis and ant.x >= x0 and ant.x <= x1 and ant.y >= y0 and ant.y <= y1 then
@@ -340,6 +342,29 @@ function M.draw(snap, vp)
       if not ant.at then col = MISSION_COL end
       local gait = (ant.x + ant.y) * 0.05
       body(sx, sy, ant.dir, antSize, col, gait, detail)
+
+      -- WHAT IT IS CARRYING, held up over its head.
+      --
+      -- This is the picture the whole food system is for: a line of ants
+      -- walking home with something. Only at the closer detail tiers --
+      -- from across the room a column reads as a column, and a crumb per
+      -- ant at that zoom is a pixel of noise.
+      if ant.carry and detail >= 2 then
+        local lift = antSize * 1.05
+        local hx = sx + math.cos(ant.dir) * lift
+        local hy = sy + math.sin(ant.dir) * lift
+        local cr = antSize * 0.42
+        -- Colour by what it is worth, which is a decent proxy for what it
+        -- is: a pale grain, a fat green aphid, a dark spider leg.
+        if ant.carry >= 4 then
+          love.graphics.setColor(0.62, 0.80, 0.44, 1)      -- aphid
+        elseif ant.carry >= 3 then
+          love.graphics.setColor(0.26, 0.20, 0.22, 1)      -- leg
+        else
+          love.graphics.setColor(0.84, 0.76, 0.38, 1)      -- grain
+        end
+        require("render.flora").disc(hx, hy, cr)
+      end
     end
   end
 end

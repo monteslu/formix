@@ -155,9 +155,17 @@ function M.draw(snap, vp, intents)
   -- "how far can THIS one throw".
 
 
+  -- MOUNDS ONLY. A location has no reach of its own -- its link to a
+  -- mound is judged by the MOUND's radius -- so drawing a ring around a
+  -- patch of grain states a rule that does not exist, and states it in
+  -- the one visual language this game promises is literal: the ring you
+  -- see IS the rule (see world.lua). It drew a 900-unit circle around
+  -- every aphid cluster the cursor touched, announcing a throw the
+  -- player cannot make.
   local ringFor = selectedId or cursorId
-  if ringFor and world.node[ringFor] then
-    local n = world.node[ringFor]
+  local ringNode = ringFor and world.node[ringFor]
+  if ringNode then
+    local n = ringNode
     if n.seen then
       local sx, sy = vp.worldToScreen(n.x, n.y)
       g.setColor(0.60, 0.90, 0.65, 0.28)

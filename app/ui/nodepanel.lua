@@ -31,10 +31,93 @@ local KIND_NAME = {
 -- empty screen -- which would fire on a tap aimed at the ground.
 M.hits = {}
 
+-- ── the panel for a place that is not a colony ─────────────────────────
+--
+-- What it says depends entirely on whether anyone has stood there. From
+-- across the map a location is a clump of something, and the only honest
+-- caption is "send ants to look" -- naming the kind here would hand over
+-- for free the one thing that makes walking up to a strange patch of
+-- ground interesting, and would take all the teeth out of the spider.
+local LOC_NAME = {
+  aphids = "Aphids", grain = "Grain", spider = "Spider",
+}
+local LOC_BLURB = {
+  aphids = "plump and full of sap",
+  grain  = "a few seeds, and more coming",
+  spider = "she is bigger than you are",
+}
+
+function M.drawLoc(vp, snap, intents, l)
+  local g = love.graphics
+  local w, h = vp.u(430), vp.u(214)
+  local x, y = vp.u(28), vp.h - h - vp.u(28)
+  local known = l.observed
+  local key = (not known) and "none"
+           or (l.owner == "you") and "you" or l.owner and "them" or "none"
+  local c = M.COL[key]
+
+  g.setColor(0.05, 0.07, 0.06, 0.84)
+  g.rectangle("fill", x, y, w, h)
+  g.setColor(c[1], c[2], c[3], 0.45)
+  g.setLineWidth(math.max(2, vp.u(3)))
+  g.line(x, y, x + w, y); g.line(x + w, y, x + w, y + h)
+  g.line(x + w, y + h, x, y + h); g.line(x, y + h, x, y)
+  g.setLineWidth(1)
+
+  local fTitle = fonts.get(vp, 30)
+  local fBody = fonts.get(vp, 24)
+  local pad = vp.u(20)
+  local ty = y + vp.u(14)
+
+  g.setFont(fTitle)
+  g.setColor(c[1], c[2], c[3], 1)
+  g.print(known and (LOC_NAME[l.kind] or "Forage") or "Something", x + pad, ty)
+  ty = ty + fTitle:getHeight() + vp.u(4)
+
+  g.setFont(fBody)
+  local function line(label, value, col)
+    col = col or { 0.88, 0.88, 0.82 }
+    g.setColor(0.66, 0.68, 0.62, 1)
+    g.print(label, x + pad, ty)
+    g.setColor(col[1], col[2], col[3], 1)
+    g.print(value, x + w - pad - fBody:getWidth(value), ty)
+    ty = ty + fBody:getHeight() + vp.u(3)
+  end
+
+  if not known then
+    line("unexplored", "send ants to look", M.COL.none)
+  else
+    line("", LOC_BLURB[l.kind] or "")
+    if (l.guard or 0) > 0 then
+      -- She is the headline. Nothing else about the place matters while
+      -- she is standing.
+      line("guarded", tostring(l.guard) .. " to beat", M.COL.them)
+      line("", "one ant per hit")
+    else
+      line("food here", tostring(l.items or 0), M.COL.you)
+      line("each worth", tostring(l.value or 1))
+      if l.regrow then line("", "it grows back") end
+      if (l.items or 0) == 0 then
+        line("", l.regrow and "wait, or come back later" or "picked clean")
+      end
+    end
+    local mine = A.garrison(snap.agents, l.id, "you")
+    if mine > 0 then line("your ants here", tostring(mine), M.COL.you) end
+  end
+end
+
 function M.draw(vp, snap, intents)
   M.hits = {}
   local id = intents.cursor and intents.cursor.node
   local n = id and snap.world.node[id]
+  -- A LOCATION GETS ITS OWN PANEL. It shares nothing with a mound's --
+  -- no queens, no garrison to raise, no upgrade -- and pouring it
+  -- through the mound layout below would offer a queen on a patch of
+  -- grain.
+  if not n then
+    local l = id and snap.world.loc and snap.world.loc[id]
+    if l then return M.drawLoc(vp, snap, intents, l) end
+  end
   if not n or not n.seen then return end
 
   local g = love.graphics

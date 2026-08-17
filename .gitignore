@@ -16,3 +16,6 @@ app/opengarden
 # Build-time level override for gates (see main.lua); never committed.
 app/startlevel
 test/suite.log
+
+# macOS finder droppings
+.DS_Store

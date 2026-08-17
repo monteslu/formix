@@ -42,6 +42,48 @@ function vp.init()
   return vp
 end
 
+-- ── zoom steps ─────────────────────────────────────────────────────────
+--
+-- FIXED RUNGS, not a smooth axis, for the button inputs (pad shoulders).
+-- Three reasons: a slow couch game does not need analog zoom to feel
+-- responsive; every rung is a composed picture the ant LOD tiers can be
+-- tuned against; and a stray press costs exactly one step to undo, which
+-- matters because the shoulders do double duty (see input/intents.lua).
+--
+-- The pinch and the wheel are CONTINUOUS and ignore this ladder -- fingers
+-- and a wheel are analog inputs and stepping them feels broken. The rungs
+-- are presets, not a constraint on where the zoom may sit.
+--
+-- The close rung is deliberately CLOSE. Age of Empires II on Xbox was
+-- criticised for not zooming in enough to read units on a TV, and this game
+-- is meant to be read from a couch (its typeface was chosen for that).
+vp.ZOOM_STEPS = { 0.20, 0.42, 0.85, 1.50 }
+vp.ZOOM_DEFAULT = 0.42
+
+-- Move one rung. Snaps to the nearest rung first when the zoom is sitting
+-- between them (which pinch and the wheel do all the time), so the first
+-- press after a pinch is never a no-op or a jump backwards.
+function vp.zoomStep(dir)
+  local steps = vp.ZOOM_STEPS
+  local z = vp.cam.zoom
+  local best, bestD = 1, math.huge
+  for i = 1, #steps do
+    local d = math.abs(steps[i] - z)
+    if d < bestD then best, bestD = i, d end
+  end
+  -- If we are between rungs, stepping "in" should go to the rung above the
+  -- current zoom rather than to the neighbour of the nearest one.
+  local i = best
+  if dir > 0 then
+    if steps[i] <= z + 1e-6 then i = i + 1 end
+  else
+    if steps[i] >= z - 1e-6 then i = i - 1 end
+  end
+  i = math.max(1, math.min(#steps, i))
+  vp.cam.zoom = steps[i]
+  return vp.cam.zoom
+end
+
 -- Scale a design-unit measurement to screen pixels.
 function vp.u(n) return n * vp.unit end
 
@@ -119,6 +161,78 @@ end
 function vp.zoomBy(f)
   local z = vp.cam.zoom * f
   vp.cam.zoom = math.max(vp.cam.minZoom, math.min(vp.cam.maxZoom, z))
+end
+
+-- ZOOM ABOUT A SCREEN POINT, keeping the world under it still.
+--
+-- This is the whole difference between a zoom that feels like a lens and
+-- one that feels like a teleport. Pinch a corner of the map, or spin the
+-- wheel with the cursor over a far mound: the thing you are pointing AT is
+-- the thing you mean, and it must not slide out from under you while the
+-- scale changes. Everyone implements zoom about the screen centre first and
+-- it is visibly wrong on the first try.
+--
+-- Note the order: remember the world point, change the scale, ask where
+-- that same screen point landed, and shift the camera by the difference.
+function vp.zoomAt(sx, sy, factor)
+  local wx0, wy0 = vp.screenToWorld(sx, sy)
+  vp.zoomBy(factor)
+  local wx1, wy1 = vp.screenToWorld(sx, sy)
+  vp.cam.x = vp.cam.x + (wx0 - wx1)
+  vp.cam.y = vp.cam.y + (wy0 - wy1)
+end
+
+-- Same, for a step: the rung ladder with an anchor.
+function vp.zoomStepAt(sx, sy, dir)
+  local wx0, wy0 = vp.screenToWorld(sx, sy)
+  vp.zoomStep(dir)
+  local wx1, wy1 = vp.screenToWorld(sx, sy)
+  vp.cam.x = vp.cam.x + (wx0 - wx1)
+  vp.cam.y = vp.cam.y + (wy0 - wy1)
+end
+
+-- ── keeping the field on screen ────────────────────────────────────────
+--
+-- The extents of everything that matters, cached per world. Panning by hand
+-- makes a runaway camera real for the first time -- before this, the view
+-- only ever moved a nudge at a time toward a mound, so it could not get
+-- lost. A player who flicks the stick and finds themselves in featureless
+-- dark with no idea which way is back has been handed a bug, however
+-- correct the maths was.
+--
+-- Recomputed when the world changes identity (a new level), not per frame:
+-- mounds and locations do not move, and W.dist over 30 sites every frame to
+-- learn a number that never changes is waste.
+local extents = { world = nil, x0 = 0, y0 = 0, x1 = 0, y1 = 0 }
+
+function vp.worldExtents(world)
+  if extents.world == world then
+    return extents.x0, extents.y0, extents.x1, extents.y1
+  end
+  local x0, y0 = math.huge, math.huge
+  local x1, y1 = -math.huge, -math.huge
+  local function add(s)
+    local r = s.radius or 0
+    if s.x - r < x0 then x0 = s.x - r end
+    if s.y - r < y0 then y0 = s.y - r end
+    if s.x + r > x1 then x1 = s.x + r end
+    if s.y + r > y1 then y1 = s.y + r end
+  end
+  for i = 1, #world.nodes do add(world.nodes[i]) end
+  for i = 1, #(world.locs or {}) do add(world.locs[i]) end
+  if x0 > x1 then x0, y0, x1, y1 = -500, -500, 500, 500 end
+  extents.world = world
+  extents.x0, extents.y0, extents.x1, extents.y1 = x0, y0, x1, y1
+  return x0, y0, x1, y1
+end
+
+-- Clamp against a world's own extents. The one call site every camera
+-- change funnels through, so there is no way to add a new pan or zoom path
+-- and forget the bound.
+function vp.clampToWorld(world)
+  if not world then return end
+  local x0, y0, x1, y1 = vp.worldExtents(world)
+  vp.clampCamera(x0, y0, x1, y1)
 end
 
 -- Clamp the camera so the colony's bounding box can never leave the screen

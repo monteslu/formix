@@ -33,6 +33,58 @@ M.cost = {
   upgradeMax = 2, -- how many times a single mound may be improved
 }
 
+-- FOOD: THE FUEL, NOT A SECOND CURRENCY.
+--
+-- The player never spends food on anything. A queen eats one to lay one
+-- larva, and that is the whole of it -- so ants remain the only thing you
+-- CHOOSE to spend, and food is the line that keeps them coming.
+--
+-- It is GLOBAL, one pool per side, like money in any other strategy game.
+-- Per-mound stores were considered and rejected: thematically neater,
+-- but it turns every send into bookkeeping about which hill is hungry.
+M.food = {
+  perAnt   = 1,    -- what one larva costs her
+  -- SATURATION. A mound stops laying once it is crowded, so production
+  -- cannot be concentrated into one super-hill: growing past this means
+  -- another queen (which needs ten ants) or another mound. Without it
+  -- the right play is to pour everything into home forever, which is
+  -- neither interesting nor what "a colony" means.
+  perQueen = 10,   -- workers per queen a mound may hold before she rests
+}
+
+-- ── the pool ───────────────────────────────────────────────────────────
+-- Sides are discovered, never enumerated: a hardcoded list breaks the
+-- day a map fields a fourth colour, and it would break silently.
+function M.foodOf(s, side)
+  return (s.food and s.food[side]) or 0
+end
+
+function M.addFood(s, side, v)
+  if not side or not v or v == 0 then return end
+  s.food = s.food or {}
+  s.food[side] = (s.food[side] or 0) + v
+end
+
+-- Spend if it is there. Returns true if the pool paid.
+--
+-- What is eaten is COUNTED, because otherwise the food ledger cannot be
+-- closed: a gate can see what is in the ground, what is on an ant's back
+-- and what is in the pool, but the fourth place food goes -- into a
+-- larva -- is invisible, and a sum with an invisible term proves nothing
+-- about whether food is being lost or quietly duplicated.
+function M.takeFood(s, side, v)
+  local have = M.foodOf(s, side)
+  if have < v then return false end
+  s.food[side] = have - v
+  s.eaten = s.eaten or {}
+  s.eaten[side] = (s.eaten[side] or 0) + v
+  return true
+end
+
+function M.eatenBy(s, side)
+  return (s.eaten and s.eaten[side]) or 0
+end
+
 local function makeRng(seed)
   local s = (seed or 1) % 2147483647
   if s <= 0 then s = s + 2147483646 end
@@ -112,6 +164,61 @@ local function buildMap(w, rng, opts)
     best.x, best.y = home.x + (best.x - home.x) * k,
                      home.y + (best.y - home.y) * k
   end
+
+  -- ── FOOD IN THE FIELD ────────────────────────────────────────────────
+  --
+  -- Roughly one location per two and a half mounds, scattered by the same
+  -- rule and kept out of the mounds' laps. Aphids are the common windfall,
+  -- grain the slow faucet, and a spider now and then for the ground that
+  -- looks too good to be free.
+  local lkinds = { "grain", "aphids", "aphids", "grain", "spider", "aphids" }
+  local want = math.max(3, math.floor(#w.nodes / 2.5))
+  local tries2 = 0
+  while #w.locs < want and tries2 < want * 400 do
+    tries2 = tries2 + 1
+    local ang = rng() * 6.28318
+    local r = 420 + math.sqrt(rng()) * spread
+    local x, y = math.cos(ang) * r, math.sin(ang) * r
+    -- Clear of every mound and of every other location: a patch inside a
+    -- mound's worker ring is unreadable and unclickable.
+    local ok = true
+    for i = 1, #w.nodes do
+      if W.dist(w.nodes[i], { x = x, y = y }) < w.nodes[i].radius * 3.2 then
+        ok = false; break
+      end
+    end
+    if ok then
+      for i = 1, #w.locs do
+        if W.dist(w.locs[i], { x = x, y = y }) < 520 then ok = false; break end
+      end
+    end
+    if ok then
+      W.addLoc(w, lkinds[math.floor(rng() * #lkinds) + 1], x, y)
+    end
+  end
+
+  -- ONE GRAIN PATCH INSIDE HOME'S REACH, ALWAYS.
+  --
+  -- This is the whole of the anti-starvation guarantee on a generated
+  -- map. Queens eat, the colony starts with nothing, and a board whose
+  -- nearest food is two hops beyond the opening position is a board that
+  -- was lost before the player touched it. Grain rather than aphids
+  -- because grain comes back: the guarantee has to survive the player
+  -- spending it badly the first time.
+  local nearest, nd = nil, math.huge
+  for i = 1, #w.locs do
+    local d = W.dist(home, w.locs[i])
+    if w.locs[i].kind == "grain" and d < nd then nearest, nd = w.locs[i], d end
+  end
+  if not nearest then
+    nearest = W.addLoc(w, "grain", W.reach(home) * 0.7, 0)
+    nd = W.dist(home, nearest)
+  end
+  if nd > W.reach(home) * 0.9 then
+    local k = (W.reach(home) * 0.7) / nd
+    nearest.x = home.x + (nearest.x - home.x) * k
+    nearest.y = home.y + (nearest.y - home.y) * k
+  end
 end
 
 -- `levelId` selects a hand-built opening (sim/campaign.lua); omit it for
@@ -129,12 +236,22 @@ function M.new(seed, levelId, opts)
     time = 0, ticks = 0,
     paused = false,
     events = {},
+    -- EVERYONE STARTS HUNGRY. Nobody has a grain to their name; the
+    -- first larva anywhere is paid for by something a worker carried
+    -- home. (A level may seed a side by hand -- see campaign.build.)
+    food = {},
+    eaten = {},
+    dead = {},
   }
   s.world = W.new(rng)
   s.agents = A.new(s.world, rng)
 
   if level and not level.generated then
     campaign.build(level, s.world, W, s.agents, A)
+    local sides = campaign.sides(level)
+    for i = 1, #sides do
+      M.addFood(s, sides[i], campaign.startFood(level, sides[i]))
+    end
   else
     buildMap(s.world, rng, opts)
     -- Your opening hand on the open field.
@@ -191,6 +308,17 @@ function M.updateVision(s)
     n.observed = false     -- can you see who is on this mound
     n.lit = false          -- is this mound's radius out of the fog
   end
+  -- LOCATIONS FOG THE SAME WAY, and what theirs hides is the KIND. An
+  -- unvisited location is an anonymous grey clump: you cannot tell
+  -- grain from aphids from a spider until somebody stands on it, which
+  -- is what makes walking up to one a real decision instead of a
+  -- formality.
+  for i = 1, #s.world.locs do
+    local l = s.world.locs[i]
+    l.seen = true
+    l.observed = false
+    l.held = false
+  end
 
   -- TWO DIFFERENT QUESTIONS, and conflating them was the bug.
   --
@@ -239,14 +367,27 @@ function M.updateVision(s)
   for i = 1, s.agents.n do
     local ant = s.agents.pool[i]
     if ant.side == A.YOU and ant.at then
-      local n = s.world.node[ant.at]
+      -- A LOCATION COUNTS AS GROUND UNDERFOOT. Looking this up in
+      -- `world.node` alone left a squad standing on a grain patch
+      -- invisible to the fog: the patch stayed an anonymous clump with
+      -- ants drawn on top of it, and the mounds it could see next door
+      -- stayed dark.
+      local n = W.site(s.world, ant.at)
       if n then
         n.observed = true
         n.held = true
         -- ...and the mounds within its reach, so a squad sees who lives
         -- next door. Ground is NOT lit by this: `lit` still needs a queen.
-        local ns = W.neighbours(s.world, n)
-        for k = 1, #ns do ns[k].observed = true end
+        --
+        -- ONLY FROM A MOUND. Ants standing on a patch of food see the
+        -- patch they are standing on and nothing else: a location does
+        -- not extend what you can see any more than it extends where you
+        -- can send. Otherwise a lucky grain patch out in the dark would
+        -- quietly scout the whole corner of the map around it.
+        if not n.isLoc or n.scouts then
+          local ns = W.neighbours(s.world, n)
+          for k = 1, #ns do ns[k].observed = true end
+        end
       end
     end
   end
@@ -279,18 +420,17 @@ function M.apply(s, intent)
     n.queens = n.queens or {}
     if #n.queens >= (n.maxQueens or 3) then return false end
     if A.garrison(s.agents, n.id, A.YOU) < M.cost.queen then return false end
-    local spent = 0
-    for i = s.agents.n, 1, -1 do
-      if spent >= M.cost.queen then break end
-      local ant = s.agents.pool[i]
-      if ant.at == n.id and ant.side == A.YOU then
-        A.kill(s.agents, i)
-        spent = spent + 1
-      end
-    end
+    -- LADEN ANTS BANK WHAT THEY CARRY, in the same act that spends them.
+    -- Ten workers who walked home with food do not take it to the grave:
+    -- the new queen is born fed, which is what makes the opening
+    -- (eleven ants: ten for her, one to harvest) a puzzle worth solving.
+    local spent, banked = A.spend(s.agents, n.id, A.YOU, M.cost.queen)
+    M.addFood(s, A.YOU, banked)
     n.queens[#n.queens + 1] = { layTimer = 0 }
-    print(string.format("@queen node=%s spent=%d queens=%d garrison=%d",
-      tostring(n.id), spent, #n.queens, A.garrison(s.agents, n.id, A.YOU)))
+    print(string.format(
+      "@queen node=%s spent=%d banked=%d queens=%d garrison=%d food=%d",
+      tostring(n.id), spent, banked, #n.queens,
+      A.garrison(s.agents, n.id, A.YOU), M.foodOf(s, A.YOU)))
     s.events[#s.events + 1] = { kind = "queen", node = n.id, t = s.time }
     return true
 
@@ -315,15 +455,8 @@ function M.apply(s, intent)
     n.upgrades = n.upgrades or 0
     if n.upgrades >= (M.cost.upgradeMax or 2) then return false end
     if A.garrison(s.agents, n.id, A.YOU) < M.cost.upgrade then return false end
-    local spent = 0
-    for i = s.agents.n, 1, -1 do
-      if spent >= M.cost.upgrade then break end
-      local ant = s.agents.pool[i]
-      if ant.at == n.id and ant.side == A.YOU then
-        A.kill(s.agents, i)
-        spent = spent + 1
-      end
-    end
+    local _, banked = A.spend(s.agents, n.id, A.YOU, M.cost.upgrade)
+    M.addFood(s, A.YOU, banked)
     n[stat] = (n[stat] or 1) + 0.35
     n.upgrades = n.upgrades + 1
     s.events[#s.events + 1] = { kind = "upgraded", node = n.id,
@@ -333,49 +466,77 @@ function M.apply(s, intent)
   return false
 end
 
+-- ── death ──────────────────────────────────────────────────────────────
+-- NO WORKERS AND NO FOOD IS THE END. This replaces the old relief valve,
+-- which trickled an ant every six seconds into a queenless colony so the
+-- run could never become unwinnable. Food makes starvation a real state
+-- worth fearing, and a game you cannot lose has nothing at stake in it.
+--
+-- A side is ALIVE while any of these is true, because each is a path back
+-- to a worker:
+--   * it has an ant anywhere (even one, even laden, even in transit)
+--   * it has brood in the ground -- larvae were paid for when they were
+--     laid, so they hatch regardless of the pantry
+--   * it holds a queened mound AND has a food to feed her
+--
+-- Note that food alone saves nobody: with no ants and no queen there is
+-- nothing that can spend it. That is the shape of the loss.
+-- AN ORDERED LIST, not a set. `pairs` order is not part of Lua's
+-- contract, and two sides dying on the same tick would then print their
+-- @gameover lines in an order that could differ between runs of the same
+-- seed -- which is exactly the kind of drift the determinism gates exist
+-- to catch, arriving via the one table nobody thought was gameplay.
+local function sidesInPlay(s)
+  local out, seen = {}, {}
+  local function add(side)
+    if side and not seen[side] then seen[side] = true; out[#out + 1] = side end
+  end
+  add(A.YOU)
+  for i = 1, #s.world.nodes do add(s.world.nodes[i].owner) end
+  for i = 1, #s.world.locs do add(s.world.locs[i].owner) end
+  for i = 1, s.agents.n do add(s.agents.pool[i].side) end
+  return out
+end
+
+function M.alive(s, side)
+  for i = 1, s.agents.n do
+    if s.agents.pool[i].side == side then return true end
+  end
+  local fed = M.foodOf(s, side) >= M.food.perAnt
+  for i = 1, #s.world.nodes do
+    local n = s.world.nodes[i]
+    if n.owner == side then
+      if #(n.brood or {}) > 0 then return true end
+      if fed and #(n.queens or {}) > 0 then return true end
+    end
+  end
+  return false
+end
+
+function M.checkDeath(s)
+  s.dead = s.dead or {}
+  local sides = sidesInPlay(s)
+  for k = 1, #sides do
+    local side = sides[k]
+    -- LATCHED, AND ANNOUNCED ONCE. Gates read @-lines out of the cart
+    -- log and the UI keys off the flag; a per-tick reprint would drown
+    -- both. Death is final -- nothing in the rules can undo it.
+    if not s.dead[side] and not M.alive(s, side) then
+      s.dead[side] = true
+      if side == A.YOU then s.gameOver = true end
+      print(string.format("@gameover side=%s t=%.1f", tostring(side), s.time))
+      s.events[#s.events + 1] = { kind = "dead", side = side, t = s.time }
+    end
+  end
+end
+
 function M.update(s, dt)
   if s.paused then return end
   s.time = s.time + dt
   s.ticks = s.ticks + 1
   s.world.time = s.time
 
-  -- THE RUN CAN NEVER BECOME UNWINNABLE.
-  --
-  -- Production comes ONLY from queens, and a queen costs ten ants -- so a
-  -- colony with no queen and fewer than ten ants can never make another
-  -- ant, never raise a queen, and never do anything again. Nothing told
-  -- the player, either: the game just sat there. A player who spent their
-  -- ants before understanding the economy was simply finished, staring at
-  -- a board that would not move.
-  --
-  -- A queenless colony below the price of a queen gets a slow trickle at
-  -- its home mound -- far slower than a real queen, so it is never a
-  -- strategy, only a floor. The moment a queen exists this stops entirely.
-  do
-    local queens, ants = 0, 0
-    for i = 1, #s.world.nodes do
-      queens = queens + #(s.world.nodes[i].queens or {})
-    end
-    for i = 1, s.agents.n do
-      if s.agents.pool[i].side == A.YOU then ants = ants + 1 end
-    end
-    if queens == 0 and ants < M.cost.queen then
-      s.reliefTimer = (s.reliefTimer or 0) + dt
-      if s.reliefTimer >= 6 then
-        s.reliefTimer = 0
-        local home = s.world.node[s.world.homeId]
-        if not (home and home.owner == A.YOU) then
-          for i = 1, #s.world.nodes do
-            local n = s.world.nodes[i]
-            if n.owner == A.YOU then home = n; break end
-          end
-        end
-        if home then A.spawn(s.agents, home.id, A.YOU) end
-      end
-    else
-      s.reliefTimer = 0
-    end
-  end
+  M.checkDeath(s)
 
   -- PRODUCTION. Only a mound with a nursery raises ants, and it does so
   -- at its own rate. This is the entire economy.
@@ -404,12 +565,34 @@ function M.update(s, dt)
       local period = W.growPeriod(n)
       n.brood = n.brood or {}
       local room = 4 + #n.queens * 3
+      -- SATURATION: a crowded mound rests. Counting the brood already in
+      -- the chamber as well as the standing garrison stops a nursery
+      -- overshooting the cap by everything it has in the ground. Ants
+      -- merely PASSING THROUGH are not counted (they are counted where
+      -- they came from and where they are going), so massing an army at
+      -- a front mound never sterilises it.
+      local crowd = A.garrison(s.agents, n.id, n.owner) + #n.brood
+      local full = crowd >= M.food.perQueen * #n.queens
       for qi = 1, #n.queens do
         local q = n.queens[qi]
         q.layTimer = (q.layTimer or 0) + dt * rate
         if q.layTimer >= period then
-          q.layTimer = q.layTimer - period
-          if #n.brood < room then
+          -- SHE LAYS ONLY IF THERE IS ROOM AND A MEAL.
+          --
+          -- Every reason not to lay is checked BEFORE the food is taken,
+          -- or the pantry pays for larvae that were never laid -- a leak
+          -- that only shows up on a crowded mound and looks like famine
+          -- arriving from nowhere.
+          --
+          -- Hunger DELAYS production, it never destroys progress: the
+          -- timer holds at full rather than resetting, so a queen who has
+          -- been waiting lays on the first tick after food arrives.
+          if full or #n.brood >= room then
+            q.layTimer = period
+          elseif not M.takeFood(s, n.owner, M.food.perAnt) then
+            q.layTimer = period
+          else
+            q.layTimer = q.layTimer - period
             -- A LARVA IS LAID BY A PARTICULAR QUEEN and starts at her
             -- gaster, then crawls a little way off as it ripens. The
             -- renderer reads `queen` to find where she is, so an egg
@@ -455,7 +638,29 @@ function M.update(s, dt)
     end
   end
 
+  -- The ground's own clock: grain comes back, aphids and legs do not.
+  W.updateLocs(s.world, dt)
+
   A.update(s.agents, dt)
+
+  -- SWEEP THE DELIVERIES. Ants bank what they carried into an
+  -- accumulator on the agent pool rather than reaching up into the sim
+  -- (which would be a require cycle); this is the one place it lands in
+  -- the pool. Ordered side list, because iteration order of a plain
+  -- table is not part of the determinism contract.
+  do
+    local sides = sidesInPlay(s)
+    for k = 1, #sides do
+      local got = A.takeBanked(s.agents, sides[k])
+      if got > 0 then
+        M.addFood(s, sides[k], got)
+        if sides[k] == A.YOU then
+          print(string.format("@forage delivered=%d food=%d t=%.1f",
+            got, M.foodOf(s, A.YOU), s.time))
+        end
+      end
+    end
+  end
   -- WAKE ON CONTACT. The enemy is asleep until the player can see it --
   -- `observed` is set for a mound inside the reach of ground you hold, so
   -- this fires exactly when the frontier touches them. Once awake it
@@ -501,6 +706,9 @@ function M.snapshot(s)
     time = s.time, events = s.events,
     cost = M.cost,
     level = s.level, levelId = s.levelId, levelDone = s.levelDone,
+    food = M.foodOf(s, A.YOU), foodCfg = M.food,
+    gameOver = s.gameOver,
+    carried = A.carried(s.agents, A.YOU),
   }
 end
 
@@ -509,6 +717,8 @@ function M.dump(s)
     string.format("t=%.3f ticks=%d seed=%d", s.time, s.ticks, s.seed),
     "world " .. W.digest(s.world),
     "agents " .. A.digest(s.agents),
+    string.format("food you=%d carried=%d", M.foodOf(s, A.YOU),
+                  A.carried(s.agents, A.YOU)),
   }, "\n")
 end
 

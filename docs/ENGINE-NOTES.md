@@ -65,6 +65,23 @@ overlay toggle and the START guard while the cart log had been saying
 file already said so, and it would have saved the detour twice in one
 session.
 
+**`love.mouse.isDown(1)` IS ALSO TRUE WHEN PAD R IS HELD.** The prelude
+mirrors the pad's R button onto mouse button 1 as a convenience for
+pad-only hosts (`mouse.isDown` has an explicit fallback: "gamepad
+fallback: R trigger is fire, mirroring button 1"). Harmless while R did
+nothing spatial -- and poison the moment R became zoom-out. Symptom:
+pressing R to zoom silently PICKED UP whichever mound the mouse cursor
+happened to be resting over, so the next A press -- which the player meant
+as "select this" -- was read as "put it back down" and appeared to do
+nothing. On a desktop it would also pan the view on every zoom press, since
+a click on open ground is now a camera drag. It cost an hour, because the
+visible failure was two buttons away from the cause and the pad and the
+mouse look like separate worlds.
+
+Read the RAW pointer (`wc.pointer(0)` returns x, y, buttons, active) in any
+cart that reads the pad itself; the mirror is only for carts that do not.
+`input/intents.lua` does exactly that now.
+
 **Warm fonts BEFORE anything caches a font object.** hud.lua and
 caste_widget.lua both keep the font they are handed at init, so warming
 afterwards left them drawing at whatever they had already stored --

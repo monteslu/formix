@@ -23,6 +23,21 @@ ants walk there. Everything else is a modifier on that.
 | **Take** | Enough arrivals colonise empty ground. Held ground has to be fought for. |
 | **Queen** | Ten ants raise one. She lays larvae, they hatch, and that mound starts paying for the next. |
 | **Brood** | Twenty ants speed up a queen's laying. Twice per mound, so no single super-hill. |
+| **Feed** | A queen eats to lay: one food, one worker. Food is carried home from aphids, grain and the odd spider. |
+
+## Moving the view
+
+| | pan | zoom |
+|---|---|---|
+| **touch** | drag anywhere that is not a mound | pinch |
+| **mouse** | drag empty ground | scroll wheel |
+| **pad** | right stick | shoulders (L/R); R3 resets |
+
+A drag that starts ON a mound is always a send, never a pan, and a second
+finger landing mid-drag cancels that send rather than completing it -- an
+irreversible move should never be one stray touch away. On the pad the
+shoulders trim the send quantity while an order is being composed and step
+the zoom the rest of the time; the gauge on screen says which.
 
 A tap only selects. Sending is always a deliberate drag, because an
 irreversible move should never be one stray tap away.

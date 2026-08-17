@@ -10,7 +10,8 @@ local W = require("sim.world")
 local A = require("sim.agents")
 
 local M = {}
-M.VERSION = 3
+-- 4: food. The pool per side, and what is left in every location.
+M.VERSION = 4
 M.FILE = "colony"
 
 local function n2(v) return string.format("%.2f", v) end
@@ -23,6 +24,36 @@ function M.serialize(s)
   put("level", s.nextLevelId or s.levelId or "-")
   put("t", n2(s.time))
   put("rng", s._rngState())
+
+  -- ── the pantry ───────────────────────────────────────────────────────
+  --
+  -- IN-FLIGHT FOOD IS BANKED ON SAVE. An ant is weather, not history --
+  -- carriers are restored as plain garrison counts at their mound, so a
+  -- crumb halfway across the field has nowhere to be written down. Adding
+  -- it to the pool instead conserves the total, which is the property
+  -- that matters; the alternative is food that evaporates when a player
+  -- closes the game at the wrong moment.
+  do
+    local sides, seen = {}, {}
+    local function add(x) if x and not seen[x] then seen[x] = true; sides[#sides+1] = x end end
+    add("you")
+    for i = 1, #s.world.nodes do add(s.world.nodes[i].owner) end
+    for i = 1, #s.world.locs do add(s.world.locs[i].owner) end
+    for i = 1, #sides do
+      local side = sides[i]
+      local pool = (s.food and s.food[side]) or 0
+      put("food", side, pool + A.carried(s.agents, side))
+    end
+  end
+
+  -- Every location, by position, with what is left in it and how far
+  -- along its regrowth is. A spider's remaining fight is part of the
+  -- state too: reloading must not resurrect her, nor kill her early.
+  for i = 1, #s.world.locs do
+    local l = s.world.locs[i]
+    put("L", i, l.owner or "-", l.items or 0, n2(l.regrowT or 0),
+        l.guard or 0)
+  end
 
   for i = 1, #s.world.nodes do
     local n = s.world.nodes[i]
@@ -76,6 +107,19 @@ function M.deserialize(s, text)
     elseif k == "rng" then
       local st = tonumber(f[2])
       if st and st > 0 then s._setRng(st) end
+    elseif k == "food" then
+      s.food = s.food or {}
+      s.food[f[2]] = tonumber(f[3]) or 0
+    elseif k == "L" then
+      local i = tonumber(f[2])
+      local l = i and s.world.locs[i]
+      if l then
+        local own = f[3]
+        l.owner = (own and own ~= "-" and own ~= "") and own or nil
+        l.items = tonumber(f[4]) or 0
+        l.regrowT = tonumber(f[5]) or 0
+        l.guard = tonumber(f[6]) or 0
+      end
     elseif k == "n" then
       local i = tonumber(f[2])
       local nd = i and s.world.nodes[i]
