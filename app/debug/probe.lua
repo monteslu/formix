@@ -73,6 +73,26 @@ function M.reportMounds(S)
   end
 end
 
+-- Every ant with business at one site: standing on it, headed for it, or
+-- ultimately bound for it. Not wired into the overlay's automatic dump --
+-- call it by hand from a debug script with the site id you are chasing.
+-- Built to find the stuck-forage bug (a location a rival owned could
+-- never change hands, so ants sat on full stock doing nothing -- see
+-- M.fight in sim/agents.lua) and worth keeping for the next one like it.
+function M.reportAnts(S, siteId)
+  local a = S.agents
+  for i = 1, a.n do
+    local ant = a.pool[i]
+    if (ant.at == siteId) or (ant.to == siteId) or (ant.goal == siteId) then
+      print(string.format(
+        "@ant i=%d side=%s at=%s from=%s to=%s goal=%s stage=%s t=%.3f carry=%s x=%.0f y=%.0f",
+        i, tostring(ant.side), tostring(ant.at), tostring(ant.from),
+        tostring(ant.to), tostring(ant.goal), tostring(ant.stage),
+        ant.t or -1, tostring(ant.carry), ant.x or -1, ant.y or -1))
+    end
+  end
+end
+
 -- Every location: what it is, who holds it, how much is left in it. The
 -- kind is reported even when the fog is hiding it from the PLAYER -- a
 -- gate has to be able to assert that the screen does not show what this

@@ -856,10 +856,29 @@ function M.fight(a, dt)
   -- and somebody else is still standing on it. Energy is spent as the
   -- attackers dig in, so a fortified mound still costs more than an empty
   -- one -- it is just no longer the whole fight.
-  local W = a.world
+  --
+  -- (Not named `W` here: that shadows the sim.world MODULE this file
+  -- requires at the top, and W.site below needs the module, not the
+  -- world TABLE. The shadow compiled fine and threw at runtime the first
+  -- time anything reached this line: "attempt to call a nil value
+  -- (field 'site')", because `a.world.site` is nothing.)
+  local world = a.world
   for k = 1, #ids do
     local id = ids[k]
-    local site = W.node and W.node[id]
+    -- LOCATIONS TOO, NOT JUST MOUNDS. This used to read only W.node[id],
+    -- so a location a rival had claimed could never change hands again --
+    -- no queen to dig out, no energy to grind down, nothing at all in
+    -- this loop even looked at it. The player's ants would arrive (the
+    -- generic hostile-ground branch above sets `ant.at` for either kind),
+    -- sit there with `held=true`, and never pick up a single item, because
+    -- the pickup rule requires `n.owner == ant.side` and nothing was ever
+    -- going to make that true again.
+    --
+    -- Reproduced directly: force a location's owner to a rival, send the
+    -- player at it, and watch -- items sat at 4/6 forever while `held`
+    -- correctly flipped true. The ants were exactly where they should be
+    -- and could do nothing there.
+    local site = W.site(world, id)
     if site and site.owner then
       local defenders, attacker = 0, nil
       for i = 1, a.n do

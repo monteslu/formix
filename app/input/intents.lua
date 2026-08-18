@@ -662,6 +662,7 @@ local function updatePointer(world, agents)
         p.lastX, p.lastY = p.x, p.y
         p.dragging = false
         p.panning = false
+        p.miniDrag = false
         local menu = require("ui.menu")
         if menu.open then
           local row = menu.hitRow(M.vp, p.x, p.y)
@@ -670,6 +671,26 @@ local function updatePointer(world, agents)
           p.startNode = nil
         elseif menu.hitPause(M.vp, p.x, p.y) then
           menu.open = true
+          p.startNode = nil
+        elseif M.vp and require("ui.minimap").hit(M.vp, p.x, p.y) then
+          -- CLICK THE MINIMAP, GO THERE. World-of-Warcraft-shaped: the
+          -- minimap is a navigation control, not just a readout, so a
+          -- press on it recentres the main view on the world point under
+          -- the finger. Handled before the world-pick below for the same
+          -- reason a panel button is -- the minimap sits over open screen
+          -- space in its corner, and a click there falling through to
+          -- pickNode would either select whatever mound happens to be
+          -- underneath the panel on screen, or start a camera pan from a
+          -- point the player was aiming at a DIFFERENT part of the map.
+          --
+          -- `p.miniDrag` marks the gesture so the drag branch below can
+          -- keep recentring as the finger moves across the panel (the
+          -- WoW gesture: press, then drag, and the view tracks the whole
+          -- time) without that motion being read as a send or a pan of
+          -- the MAIN view.
+          local wx2, wy2 = require("ui.minimap").screenToWorld(M.vp, world, p.x, p.y)
+          if wx2 then vp.centreOn(wx2, wy2) end
+          p.miniDrag = true
           p.startNode = nil
         elseif M.panelHit(p.x, p.y) then
           -- A PANEL BUTTON, handled before the world pick. The queen and
@@ -736,6 +757,16 @@ local function updatePointer(world, agents)
             end
           end
         end
+
+      elseif p.down and p.prevDown and p.miniDrag then
+        -- DRAGGING ACROSS THE MINIMAP keeps recentring the main view on
+        -- whatever world point is now under the finger -- the WoW gesture
+        -- of pressing and then scrubbing across the small map to pan the
+        -- big one, rather than a single click-and-release each time.
+        local mm = require("ui.minimap")
+        local wx2, wy2 = mm.screenToWorld(M.vp, world, p.x, p.y)
+        if wx2 then vp.centreOn(wx2, wy2) end
+        M.camHeld = true
 
       elseif p.down and p.prevDown and p.panning then
         -- CAMERA DRAG. The ground follows the finger 1:1 -- the world moves
@@ -818,6 +849,7 @@ local function updatePointer(world, agents)
         p.startNode = nil
         p.dragging = false
         p.panning = false
+        p.miniDrag = false
       end
     end
   end

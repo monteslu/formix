@@ -121,7 +121,12 @@ function M.draw(vp, snap, intents)
   if not n or not n.seen then return end
 
   local g = love.graphics
-  local w, h = vp.u(430), vp.u(308)
+  -- SHRUNK FROM 308: measured against its own content (title + up to
+  -- three info lines + the button row, the tallest state this panel
+  -- reaches), the old height left about 50px of dead plate below the
+  -- buttons on every mound that has them. 260 keeps a small margin over
+  -- that measured content instead of guessing a rounder number.
+  local w, h = vp.u(430), vp.u(260)
   local x, y = vp.u(28), vp.h - h - vp.u(28)
 
   -- WHAT YOU KNOW ABOUT A MOUND YOU HAVE NEVER STOOD ON: that it is

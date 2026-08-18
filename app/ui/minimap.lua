@@ -59,15 +59,47 @@ local function bounds(world)
   return x0, y0, x1, y1
 end
 
--- Top-right, BELOW the season dial (y 28..120) and the pause button
--- (y 208..282), which already own that corner. Stacking rather than
--- overlapping: an overview you cannot see under a button is not an
--- overview, and the pause button being unreachable was already a bug
--- once in this project.
+-- BOTTOM-RIGHT, matching the mound/location panel's footprint in the
+-- opposite corner (430x260 -- see ui/nodepanel.lua) rather than the old
+-- fixed 250x250 square. Same size, same margin, mirrored: the two panels
+-- read as a matched pair instead of one being an afterthought stuck under
+-- wherever the pause button happened to be.
+--
+-- It moved out from under the pause button on purpose -- that spot was
+-- only ever "below the season dial", and this build has no season dial
+-- (the button itself has moved back up to the bare top-right corner; see
+-- ui/menu.lua). Nothing about the minimap needs to live near the pause
+-- button at all.
 function M.rect(vp)
-  local s = vp.u(250)
-  local x, y = vp.w - s - vp.u(28), vp.u(310)
-  return x, y, s, s
+  local w, h = vp.u(430), vp.u(260)
+  local x, y = vp.w - w - vp.u(28), vp.h - h - vp.u(28)
+  return x, y, w, h
+end
+
+-- Hit-test: is this point inside the panel at all. Kept separate from the
+-- click-to-navigate handler in intents.lua so input code never has to
+-- know the panel's geometry -- only whether a point landed in it and,
+-- if so, what world position that point maps to (M.screenToWorld).
+function M.hit(vp, sx, sy)
+  local x, y, w, h = M.rect(vp)
+  return sx >= x and sx <= x + w and sy >= y and sy <= y + h
+end
+
+-- THE SAME PROJECTION draw() uses, run backward: a screen point inside the
+-- panel to the world position it represents. Recomputing bounds() here
+-- rather than caching the last draw's numbers means a click always reads
+-- against the CURRENT known map, never a stale frame from before the last
+-- mound was discovered.
+function M.screenToWorld(vp, world, sx, sy)
+  local bx0, by0, bx1, by1 = bounds(world)
+  if not bx0 then return nil end
+  local px, py, pw, ph = M.rect(vp)
+  local wsx = pw / (bx1 - bx0)
+  local wsy = ph / (by1 - by0)
+  local ws = math.min(wsx, wsy)
+  local ox = px + (pw - (bx1 - bx0) * ws) * 0.5
+  local oy = py + (ph - (by1 - by0) * ws) * 0.5
+  return bx0 + (sx - ox) / ws, by0 + (sy - oy) / ws
 end
 
 function M.draw(snap, vp)

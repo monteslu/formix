@@ -115,18 +115,16 @@ function M.handle(kind, arg)
   return false
 end
 
--- THE PAUSE BUTTON. Top-right, under the season dial and clear of
--- everything else: the first version was an invisible hotspot in the
--- bottom-right corner, which put it underneath the caste widget's bars --
--- so on a phone the corner either adjusted a caste or hit empty grass, and
--- the menu was simply unreachable by touch. An invisible affordance that
--- overlaps a visible one loses, every time. It is drawn now, and this ONE
--- rect is the single source for both drawing and hit-testing so the two can
--- never drift apart.
+-- THE PAUSE BUTTON. Top-right corner itself now -- it used to sit 180px
+-- BELOW that corner, reserved for a season dial that this build does not
+-- have (the comment describing it as "under the season dial" outlived the
+-- dial by a long way, and the button just sat in empty space with nothing
+-- above it). This ONE rect is still the single source for both drawing
+-- and hit-testing so the two can never drift apart.
 function M.pauseRect(vp)
   local x, y = vp.anchor("tr")
   local s = vp.u(74)
-  return x - s, y + vp.u(180), s, s
+  return x - s, y, s, s
 end
 
 function M.hitPause(vp, sx, sy)
@@ -137,18 +135,65 @@ end
 
 -- Drawn with the HUD (not with the menu), because it is what you press to
 -- OPEN the menu and therefore must be visible while the menu is closed.
+--
+-- A GEAR, not two bars. Two vertical bars is the universal glyph for
+-- "pause", but this button does not pause anything by itself -- it opens
+-- the settings menu (volume, palette, hints), and pausing is one row
+-- inside it. A gear is the honest icon for "options live here"; the old
+-- glyph promised a different, more specific action than the button
+-- actually performs.
+--
+-- Drawn as a ring of teeth (trapezoid wedges) around a hollow hub, all in
+-- polygon fills for the same reason every other icon in this file avoids
+-- `circle("fill")`: it is viewport-relative on this engine and lands in
+-- the wrong place after a render-target pass (see the disc() note in
+-- render/mounds.lua). A ring of straight-edged wedges needs no circle
+-- primitive at all.
 function M.drawPauseButton(vp)
   if M.open then return end
   local g = love.graphics
   local x, y, w, h = M.pauseRect(vp)
   g.setColor(0.05, 0.07, 0.06, 0.42)
   g.rectangle("fill", x, y, w, h, vp.u(12))
+
+  local cx, cy = x + w * 0.5, y + h * 0.5
+  local rOuter, rInner, rHub = w * 0.34, w * 0.24, w * 0.14
+  local teeth = 8
   g.setColor(0.80, 0.86, 0.78, 0.55)
-  -- Two bars: the universal pause glyph, and no text to translate.
-  local bw, bh = w * 0.14, h * 0.42
-  local cy = y + (h - bh) * 0.5
-  g.rectangle("fill", x + w * 0.30 - bw * 0.5, cy, bw, bh, bw * 0.35)
-  g.rectangle("fill", x + w * 0.70 - bw * 0.5, cy, bw, bh, bw * 0.35)
+  -- Each tooth is a wedge: two points on the inner radius, two on the
+  -- outer, at slightly different angles so the tooth has a flat outer
+  -- face instead of coming to a point -- the silhouette a gear actually
+  -- has, not a starburst.
+  for i = 0, teeth - 1 do
+    local a0 = (i / teeth) * 6.28318
+    local a1 = a0 + (0.5 / teeth) * 6.28318
+    local aMid0 = a0 - (0.12 / teeth) * 6.28318
+    local aMid1 = a1 + (0.12 / teeth) * 6.28318
+    g.polygon("fill",
+      cx + math.cos(aMid0) * rInner, cy + math.sin(aMid0) * rInner,
+      cx + math.cos(a0) * rOuter,    cy + math.sin(a0) * rOuter,
+      cx + math.cos(a1) * rOuter,    cy + math.sin(a1) * rOuter,
+      cx + math.cos(aMid1) * rInner, cy + math.sin(aMid1) * rInner)
+  end
+  -- The body between teeth, so the ring reads as one continuous gear
+  -- rather than eight separate wedges with gaps at the inner radius.
+  local px, py
+  for k = 0, 24 do
+    local a = k / 24 * 6.28318
+    local qx, qy = cx + math.cos(a) * rInner, cy + math.sin(a) * rInner
+    if px then g.polygon("fill", cx, cy, px, py, qx, qy) end
+    px, py = qx, qy
+  end
+  -- The hollow hub, punched out in the background colour so the gear
+  -- reads as a ring with a hole rather than a solid disc.
+  g.setColor(0.05, 0.07, 0.06, 0.92)
+  px, py = nil, nil
+  for k = 0, 16 do
+    local a = k / 16 * 6.28318
+    local qx, qy = cx + math.cos(a) * rHub, cy + math.sin(a) * rHub
+    if px then g.polygon("fill", cx, cy, px, py, qx, qy) end
+    px, py = qx, qy
+  end
 end
 
 -- Touch: which row is under this point, if any.

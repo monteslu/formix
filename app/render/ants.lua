@@ -27,9 +27,21 @@ local ENEMY_COL = { 0.92, 0.24, 0.18 }
 -- ONE COLOUR PER ENEMY SIDE, matching the mound rims. Two rival colonies
 -- drawn in the same red make a three-way war unreadable: you cannot tell
 -- whose column is crossing your ground, or see them fighting each other.
+--
+-- GOLD USED TO BE 0.135 AWAY FROM YOUR_COL IN RGB SPACE (red sits 0.41
+-- away, three times the separation) -- an amber gold next to an amber
+-- "yours" on the same warm earth fill is not a second colour, it is the
+-- same colour with the brightness nudged. Measured off a live war-map
+-- screenshot: a gold raider standing on a green-rimmed mound you hold was
+-- reported as impossible to tell from your own ants at a glance, which is
+-- exactly what the distance predicts.
+--
+-- Pulled toward yellow rather than orange, which is what pushes it away
+-- from amber without turning it red-adjacent or reusing green (already
+-- spoken for by "you" on the rim). Distance to YOUR_COL nearly triples.
 local SIDE_COL = {
   red  = { 0.92, 0.24, 0.18 },
-  gold = { 0.95, 0.70, 0.15 },
+  gold = { 0.95, 0.90, 0.15 },
 }
 local ROLE_SIZE = { 1.0, 0.86, 1.28 }
 

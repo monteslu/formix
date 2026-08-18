@@ -109,7 +109,11 @@ function M.init(vp) built = {} end
 local RIM = {
   you  = { 0.45, 0.95, 0.55 },
   red  = { 0.98, 0.26, 0.20 },   -- unmistakably hostile
-  gold = { 0.98, 0.74, 0.16 },   -- the second colony: warm, clearly not red
+  -- Matches SIDE_COL.gold in render/ants.lua, and for the same reason: the
+  -- old 0.74,0.16 sat only 0.135 from YOUR_COL in RGB space, so a gold
+  -- ant on a gold rim read as "amber", not as "the second enemy". Pulled
+  -- toward yellow so it separates from both your colour and red's.
+  gold = { 0.98, 0.92, 0.16 },
   them = { 0.98, 0.26, 0.20 },   -- any other side falls back to red
   none = { 0.72, 0.66, 0.48 },
 }
@@ -210,6 +214,14 @@ function M.draw(snap, vp, intents)
       -- coloured ground IS the ground you hold.)
       local inhabited = n.held or n.contested
                      or (#(n.queens or {}) > 0 and n.owner == "you")
+      -- WHOSE, if it is knowable at all -- computed here, once, because
+      -- both the earth fill below and the rim further down read the same
+      -- answer to "known and coloured how". Duplicating this test at the
+      -- rim used to leave the fill with no owner colour to draw from at
+      -- all, which is the whole reason every held mound rendered identical
+      -- brown regardless of whose it was.
+      local known = inhabited
+      local c = known and M.sideColour(n.owner) or RIM.none
 
       -- Excavated grit around the base: an ant hill is a pile of stuff
       -- brought UP, and the spill is what makes it read as earth rather
@@ -260,8 +272,32 @@ function M.draw(snap, vp, intents)
         local w = alive and (1 + math.sin(t * 0.4 + rg.phase) * rg.wob) or 1
         local shade = 0.16 + k * 0.045
         if inhabited then
-          -- Earth: warm, the colour of a worked hill.
-          g.setColor(shade + 0.06, shade * 0.82 + 0.04, shade * 0.55, 1)
+          -- Earth: warm, the colour of a worked hill -- WASHED TOWARD ITS
+          -- OWNER, not plain brown regardless of whose it is.
+          --
+          -- Every held mound used to fill with the identical brown, so
+          -- ownership lived ONLY in the 4px rim -- and on a busy war
+          -- screen, with ants, food and a minimap all competing for the
+          -- eye, that ring is easy to miss entirely. Reported directly
+          -- from play: a gold raider standing on your own mound (green
+          -- rim, correct) was mistaken for one of yours because nothing
+          -- about the ground itself said "not your colour".
+          --
+          -- The wash is a BLEND toward the owner's rim colour, not a
+          -- replacement -- at 0.30 the hill still reads as worked earth,
+          -- shaded and ringed the same as before, but a red or gold mound
+          -- now differs from a green one at the largest, stillest part of
+          -- the shape, not only at its edge. `known` gates it so a mound
+          -- you have never stood on (still fogged, `n.owner` invisible to
+          -- you) never leaks its owner through the fill.
+          local ec, ey, eb = shade + 0.06, shade * 0.82 + 0.04, shade * 0.55
+          if known and c then
+            local wash = 0.30
+            ec = ec + (c[1] - ec) * wash
+            ey = ey + (c[2] - ey) * wash
+            eb = eb + (c[3] - eb) * wash
+          end
+          g.setColor(ec, ey, eb, 1)
         else
           -- STONE, mixed as its own colour rather than as a desaturated
           -- earth. Averaging the earth channels gave a dead putty grey; a
@@ -300,12 +336,11 @@ function M.draw(snap, vp, intents)
       -- reads as unheld, whoever nominally owns it, which is also the
       -- truth: an empty mound is territory, not a colony.
       -- The rim uses the SAME "alive" test as the colour, so a queened
-      -- mound is never brown with a neutral rim.
-      local known = inhabited
+      -- mound is never brown with a neutral rim. `known` and `c` are
+      -- computed once, above the fill, and reused here.
       local key = known and ((n.owner == "you") and "you"
                           or n.owner and "them" or "none")
                or "none"
-      local c = known and M.sideColour(n.owner) or RIM.none
       g.setColor(c[1], c[2], c[3], key == "none" and 0.34 or 0.85)
       g.setLineWidth(math.max(2, vp.u(key == "none" and 2 or 4)))
       if key == "none" then
