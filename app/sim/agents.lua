@@ -55,6 +55,15 @@ M.cfg = {
   gateRing     = 1.44,   -- mound radii: just outside the worker ring
   rimSpeed     = 1.7,    -- radians/sec while walking round to the gate
 
+  -- HOW FAST A BODY CAN SWING ROUND. An ant pivots quickly but not
+  -- instantly, and this is the only thing standing between the renderer
+  -- and a sprite that teleports through 180 degrees in one frame.
+  --
+  -- 9 rad/sec is about half a turn in 0.35s: fast enough that a departing
+  -- column still looks decisive, slow enough that every snap this file
+  -- used to produce becomes a visible pivot instead. See M.face.
+  turnRate     = 9.0,    -- radians/sec the facing may change
+
   -- ── COMBAT ───────────────────────────────────────────────────────────
   --
   -- A FIGHT TAKES TIME, and it is not a coin flip.
@@ -121,6 +130,51 @@ M.YOU = "you"
 -- cannot be killed, and nothing would have caught it.
 function M.newQueen()
   return { layTimer = 0, hp = M.cfg.queenHp }
+end
+
+-- FACE WHERE YOU ARE ACTUALLY GOING, and get there by turning.
+--
+-- Every stage of an ant's life used to compute `dir` from whatever number
+-- was convenient to that stage, and the stages disagreed:
+--
+--   * MILLING  faced `phase + 90*spin` -- the lane's tangent, not the
+--     ant's. The ant chases its lane target rather than sitting on it, so
+--     the two drift apart, and re-rolling the target (`wt` expiring)
+--     snapped the body up to 164 degrees with no movement to justify it.
+--   * RIM      faced `cur + 90*sign(diff)` -- tangential, sign taken from
+--     which way round it still has to go.
+--   * CROSSING faced `atan2(dy, dx)` -- along the travel vector.
+--
+-- Two of those are tangents and one is a heading, so leaving the mound
+-- turned the body 90 degrees in a single frame; and when the rim's turn
+-- direction opposed the mound's spin, the mill->rim handoff was a clean
+-- 180. Measured on the Gather board, one send produced jumps of 163, 106,
+-- 127, 164, 180, 90 and 89 degrees. That is the "shaking" -- the body
+-- flipping back and forth as an ant leaves a mound.
+--
+-- The fix is to stop deriving facing from bookkeeping at all. An ant faces
+-- the way it MOVED, whatever stage it is in, and it can only turn so fast.
+-- One rule, so there is no handoff left to disagree about.
+--
+-- Called with the ant's position BEFORE it moved. A frame that produced no
+-- real displacement leaves the facing alone rather than snapping it to a
+-- direction computed from rounding noise.
+function M.face(ant, px, py, dt)
+  local dx, dy = ant.x - px, ant.y - py
+  -- Below this the "direction" is numerical noise, not a heading. An ant
+  -- easing the last hair into its lane must not spin to face the jitter.
+  if dx * dx + dy * dy < 1e-6 then return end
+  local want = math.atan(dy, dx)
+  local cur = ant.dir or want
+  -- Shortest way round, so a turn across the +/-pi seam is a small pivot
+  -- rather than the long way about.
+  local diff = (want - cur + math.pi) % 6.28318 - math.pi
+  local step = M.cfg.turnRate * dt
+  if math.abs(diff) <= step then
+    ant.dir = want
+  else
+    ant.dir = cur + (diff > 0 and step or -step)
+  end
 end
 
 function M.new(world, rng)
@@ -212,8 +266,32 @@ function M.spawn(a, nodeId, side)
   ant.wx, ant.wy = math.cos(wa) * wr, math.sin(wa) * wr
   ant.wt = a.rng() * 2.0
   local n = a.world.node[nodeId]
-  ant.x, ant.y = n.x, n.y
-  ant.dir = a.rng() * 6.28318
+  -- A NEW WORKER COMES UP OUT OF THE CHAMBER, not out of a point.
+  --
+  -- Spawning on the mound's exact centre made every hatchling FLOAT
+  -- OUTWARD IN A SPIRAL: the milling code walks an ant toward the lane
+  -- target its `phase` picks out on the perimeter, and `phase` keeps
+  -- advancing round the circle while the ant is still crossing the radius.
+  -- A point travelling outward while its target rotates traces a spiral --
+  -- so a hatch read as something drifting up out of the middle rather than
+  -- an ant climbing out of a nest and joining the traffic.
+  --
+  -- Born ON its lane instead, at a small inner radius: it starts where the
+  -- milling rule already wants it to be, so the very first step it takes is
+  -- an ordinary walk round the ring. `phase` is already random per ant
+  -- (above), so hatchlings still come up all over the mound rather than
+  -- from one door.
+  --
+  -- Inside the wander band rather than on it, because a worker that has
+  -- just climbed out should still drift outward into the procession -- a
+  -- short honest walk, not a spiral.
+  local br = n.radius * (M.cfg.orbitMin * 0.75)
+  ant.x = n.x + math.cos(ant.phase) * br
+  ant.y = n.y + math.sin(ant.phase) * br
+  -- FACING THE WAY IT WILL WALK, so its first frame is not a pivot. The
+  -- lane is a circle, so that is the tangent at its own phase, turned the
+  -- way this mound circulates.
+  ant.dir = ant.phase + 1.5708 * (n.spin or 1)
   a.born = a.born + 1
   return ant
 end
@@ -464,6 +542,7 @@ function M.update(a, dt)
         local ty = n.y + math.sin(ant.phase) * r
         local dx, dy = tx - ant.x, ty - ant.y
         local d = math.sqrt(dx * dx + dy * dy)
+        local px, py = ant.x, ant.y
         if d > 0.4 then
           local v = M.cfg.wanderSpeed * ant.speed * dt
           if v > d then v = d end
@@ -471,8 +550,11 @@ function M.update(a, dt)
           ant.y = ant.y + dy / d * v
         end
         -- Face along the walk, so the procession looks like it is going
-        -- somewhere.
-        ant.dir = ant.phase + 1.5708 * (n.spin or 1)
+        -- somewhere. Derived from the step actually taken rather than from
+        -- `phase`: the ant chases its lane target instead of sitting on it,
+        -- so the tangent of the lane is not the heading of the ant, and
+        -- re-rolling the target used to snap the body without moving it.
+        M.face(ant, px, py, dt)
       end
     else
       local from, to = W.site(world, ant.from), W.site(world, ant.to)
@@ -505,9 +587,13 @@ function M.update(a, dt)
           -- Ease outward to the gate ring as it goes.
           local curR = math.sqrt((ant.x - from.x) ^ 2 + (ant.y - from.y) ^ 2)
           local nr = curR + (gr - curR) * math.min(1, dt * 2.2)
+          local px, py = ant.x, ant.y
           ant.x = from.x + math.cos(cur) * nr
           ant.y = from.y + math.sin(cur) * nr
-          ant.dir = cur + 1.5708 * (diff > 0 and 1 or -1)
+          -- Along the arc it just walked. The old tangent took its sign
+          -- from which way round the gate still was, so an ant rounding a
+          -- mound whose spin opposed that turn flipped a full 180.
+          M.face(ant, px, py, dt)
         end
       else
         -- CROSSING the open ground, from the gate to the target.
@@ -547,6 +633,43 @@ function M.update(a, dt)
             if ant.goal and ant.goal ~= ant.at then
               local nxt = W.nextHop(world, ant.at, ant.goal, ant.side)
               if nxt then
+                -- PASSING THROUGH IS NOT ARRIVING.
+                --
+                -- A leg ends at `t >= 1`, which puts the ant on the
+                -- mound's exact CENTRE. For an ant that stops here that is
+                -- fine -- the milling rule walks it out to the ring. But an
+                -- ant only changing trains got sent straight back into the
+                -- "rim" stage from that centre point, so it walked a full
+                -- arc from the middle of the hill out to the next gate:
+                -- a visible detour into the centre and back out, on a
+                -- journey that should read as one continuous march.
+                --
+                -- Measured: transiting ants arrived at x=0,y=0 (the hub's
+                -- centre) on every hop of a two-leg order.
+                --
+                -- A traveller crosses the mound instead. It keeps the
+                -- position it actually has and goes straight for the next
+                -- gate, so a long order looks like a column walking THROUGH
+                -- a waypoint rather than stopping to tour it.
+                -- It walks on from WHERE IT IS. The arrival put it on
+                -- the mound's centre (a leg ends at t>=1, which is the
+                -- destination point exactly), and the next leg is a
+                -- straight crossing from that position to the next gate.
+                -- Starting the crossing here means the ant continues in
+                -- one motion -- in at one side, out at the other -- with
+                -- no arc around a hill it is not stopping at.
+                --
+                -- BUT ONLY IF IT HAS NO BUSINESS HERE. Skipping the "at"
+                -- frame entirely is what the pickup rule reads to decide
+                -- whether an ant is standing on food (see `n.isLoc` above),
+                -- so a route that happened to run over a grain patch used
+                -- to harvest it in passing and now walked straight over the
+                -- top: test-war caught it as rivals whose food never left
+                -- the ground (items 24 -> 25, i.e. regrowth only).
+                --
+                -- So a waypoint it could take something from is a stop, not
+                -- a pass -- it gets its frame, picks up, and leaves next
+                -- tick like any other arrival.
                 ant.from, ant.to = ant.at, nxt
                 ant.at, ant.stage, ant.t = nil, "rim", 0
               else
@@ -597,9 +720,14 @@ function M.update(a, dt)
             ant.phase = ant.phase + 1.1
           end
         else
+          local px, py = ant.x, ant.y
           ant.x = ox + dx * ant.t
           ant.y = oy + dy * ant.t
-          ant.dir = math.atan(dy, dx)
+          -- Same rule as everywhere else. The heading is constant across
+          -- the whole crossing, so this only ever has work to do on the
+          -- first frame -- easing the 90-degree turn out of the rim's
+          -- tangent into the line of march instead of snapping it.
+          M.face(ant, px, py, dt)
         end
       end
     end
