@@ -54,9 +54,74 @@ M.cfg = {
   -- single column instead of a fan.
   gateRing     = 1.44,   -- mound radii: just outside the worker ring
   rimSpeed     = 1.7,    -- radians/sec while walking round to the gate
+
+  -- ── COMBAT ───────────────────────────────────────────────────────────
+  --
+  -- A FIGHT TAKES TIME, and it is not a coin flip.
+  --
+  -- Attacks used to resolve instantly and 1-for-1: an arriving ant killed
+  -- one defender and died doing it. That made a battle a subtraction rather
+  -- than an event -- there was nothing to watch, nothing to reinforce
+  -- mid-fight, and no reason to care whether you sent thirty ants or
+  -- thirty-one.
+  --
+  -- Now every ant has hit points and swings once a second for 2 or 3
+  -- damage, half the time missing entirely. The randomness is per-swing, so
+  -- an individual duel is genuinely uncertain -- but the LAW OF LARGE
+  -- NUMBERS does the rest: across a real engagement the bigger army wins
+  -- comfortably, because both sides draw from the same distribution and one
+  -- of them has more dice.
+  --
+  -- Everything here is read through the ant's own `atk`/`def`, so an
+  -- offensive or defensive upgrade later is a multiplier on a body rather
+  -- than a change to this rule.
+  maxHp        = 10,     -- what a fresh worker can absorb
+  -- A QUEEN IS THE OBJECTIVE, and she is hard to kill: five workers' worth
+  -- of body. A mound belongs to whoever's queen is alive in it, so taking
+  -- an established colony means fighting through the garrison AND then
+  -- through her -- which is why a settled mound is worth more than the
+  -- ground it sits on.
+  queenHp      = 50,
+  -- ...and she is worth eating. Eight food is more than any single item in
+  -- the ground (an aphid is 6, a spider's leg 3), so a colony you storm
+  -- pays for part of the army it cost -- which is what stops a won siege
+  -- from leaving you too poor to hold the ground you just took.
+  queenFood    = 8,
+  -- BUT ONLY FOR THE PLAYER'S SIDE OF THE TABLE, and this is a balance
+  -- rule rather than a fiction one.
+  --
+  -- Paid to everybody, the bounty is a runaway loop between AIs: killing a
+  -- queen buys eight ants, eight ants take the next colony faster, and
+  -- whoever wins the first exchange eats the map. Measured on the war map
+  -- the moment it went in -- side-to-side captures jumped 2 -> 7 and gold
+  -- was ANNIHILATED (`{you:1, red:10}`), which test-war caught because it
+  -- asserts all three sides survive to fight. A three-way war where one
+  -- rival is dead by minute five is not the map's design.
+  --
+  -- A rival still gets the ground, the kill and the denial -- everything
+  -- except the compounding. The player gets the spoils because the player
+  -- is the one who needs a reason to commit to an expensive siege.
+  queenFoodRivals = 0,
+  swingPeriod  = 1.0,    -- seconds between an ant's attacks
+  hitChance    = 0.5,    -- ...and how often one lands at all
+  hitMin       = 2,      -- damage when it does land
+  hitMax       = 3,
+  -- How close two ants have to be to trade blows, in mound radii. A fight
+  -- happens AT the mound, so this only has to cover the ring the defenders
+  -- mill in plus the arrivals pushing into it.
+  fightRange   = 1.9,
 }
 
 M.YOU = "you"
+
+-- A NEW QUEEN. One constructor because there are four places that raise
+-- one (the player's apply, the rival's brain, a hand-built campaign level
+-- and a save restore), and her hit points have to be the same number in all
+-- of them -- a queen who loads back from a save with no `hp` is a queen who
+-- cannot be killed, and nothing would have caught it.
+function M.newQueen()
+  return { layTimer = 0, hp = M.cfg.queenHp }
+end
 
 function M.new(world, rng)
   local a = {
@@ -107,6 +172,17 @@ function M.new(world, rng)
       wt = 0,                -- seconds until it picks a new one
       x = 0, y = 0, dir = 0,
       speed = 1,
+      -- COMBAT. An ant is not a one-shot token any more: it has hit points
+      -- and it trades blows once a second until one side falls over.
+      --
+      -- `atk` and `def` are per-ant MULTIPLIERS, and they exist so the
+      -- offensive/defensive upgrades this game will want later are a number
+      -- on the ant rather than a rewrite of the fight: an upgrade raises
+      -- atk (harder hits) or def (hits land softer), and everything below
+      -- reads them without knowing where they came from.
+      hp = M.cfg.maxHp,
+      atk = 1, def = 1,
+      fightT = 0,            -- seconds until this ant's next swing
     }
   end
   return a
@@ -121,8 +197,12 @@ function M.spawn(a, nodeId, side)
   ant.stage, ant.goal = nil, nil
   -- THE POOL RECYCLES BODIES. A dead ant's fields survive in the slot
   -- until it is reused, so a stale `carry` here would be free food
-  -- appearing out of a corpse.
+  -- appearing out of a corpse -- and stale HP would hatch a larva that is
+  -- already half dead, which is the same bug wearing armour.
   ant.carry = nil
+  ant.hp = M.cfg.maxHp
+  ant.atk, ant.def = 1, 1
+  ant.fightT = a.rng() * M.cfg.swingPeriod   -- swings desynchronised
   ant.phase = a.rng() * 6.28318
   ant.orbit = M.cfg.orbitMin + a.rng() * (M.cfg.orbitMax - M.cfg.orbitMin)
   ant.speed = 0.85 + a.rng() * 0.3
@@ -501,31 +581,20 @@ function M.update(a, dt)
             ant.at, ant.from, ant.to = ant.to, nil, nil
             ant.stage, ant.goal = nil, nil
           else
-            -- HOSTILE. Attackers burrow to the core and sap the mound's
-            -- energy. An attack is a trade: a defender dies and
-            -- so does the attacker, and only once the defenders are gone
-            -- does the energy come down. A defended node is defended.
-            local killed = false
-            for k = 1, a.n do
-              local d = a.pool[k]
-              if d.at == ant.to and d.side == dest.owner then
-                kill(a, k)
-                killed = true
-                break
-              end
-            end
-            if killed then
-              dead = true
-            else
-              dest.energy = (dest.energy or 0) - 1
-              if dest.energy <= 0 then
-                dest.owner, dest.energy = ant.side, 0
-                ant.at, ant.from, ant.to = ant.to, nil, nil
-                ant.stage, ant.goal = nil, nil
-              else
-                dead = true
-              end
-            end
+            -- HOSTILE GROUND: LAND AND FIGHT.
+            --
+            -- This used to resolve on the spot -- the arriving ant killed
+            -- one defender and died with it, or chipped one point off the
+            -- mound's energy and died. A battle was therefore instantaneous
+            -- subtraction: nothing to watch, nothing to reinforce, and no
+            -- difference between sending thirty ants and thirty-one.
+            --
+            -- Now the attacker simply ARRIVES, and the fighting is done in
+            -- M.fight() over the following seconds. It stands on ground it
+            -- does not own, which is exactly the state combat resolves.
+            ant.at, ant.from, ant.to = ant.to, nil, nil
+            ant.stage, ant.goal = nil, nil
+            ant.phase = ant.phase + 1.1
           end
         else
           ant.x = ox + dx * ant.t
@@ -536,6 +605,201 @@ function M.update(a, dt)
     end
 
     if dead then kill(a, i) else i = i + 1 end
+  end
+end
+
+-- ── COMBAT ─────────────────────────────────────────────────────────────
+--
+-- Ants standing on the same mound with different colours fight, once a
+-- second each, until one colour is gone. Then whoever is left standing on
+-- ground they do not own takes it.
+--
+-- WHY DICE RATHER THAN ARITHMETIC. A deterministic trade (one attacker
+-- kills one defender) makes every battle a subtraction you can do in your
+-- head before you order it, which is the same as having no battle. A swing
+-- that lands half the time for 2 or 3 makes a single duel genuinely
+-- uncertain -- and because both sides draw from the SAME distribution, the
+-- larger army still wins on average by the law of large numbers. Ten ants
+-- against five is not a coin flip; ten against nine is a real question.
+--
+-- DETERMINISM IS PRESERVED. Every roll comes from the injected RNG
+-- (`a.rng`), never math.random and never a clock, so the same seed and the
+-- same orders still replay identically -- which the longrun/determinism
+-- gates check.
+--
+-- `atk` and `def` are read off the ANT, so a future offensive or defensive
+-- upgrade is a multiplier on a body and needs no change here.
+function M.fight(a, dt)
+  local cfg = M.cfg
+  -- Group the combatants by the mound they are standing on. Only ants that
+  -- are AT a site fight: a column in transit is not in the battle yet, which
+  -- is what makes arriving reinforcements feel like arriving reinforcements.
+  local byNode = {}
+  for i = 1, a.n do
+    local ant = a.pool[i]
+    if ant.at then
+      local g = byNode[ant.at]
+      if not g then g = {}; byNode[ant.at] = g end
+      g[#g + 1] = i
+    end
+  end
+
+  -- ORDERED, not `pairs`. Iteration order of a plain table is not part of
+  -- Lua's contract, and rolling dice in a different order for the same seed
+  -- would break replay -- the one way randomness can leak determinism.
+  local ids = {}
+  for id in pairs(byNode) do ids[#ids + 1] = id end
+  table.sort(ids)
+
+  for k = 1, #ids do
+    local group = byNode[ids[k]]
+    -- Is there more than one side here at all? The overwhelming majority of
+    -- mounds are peaceful, so this cheap check keeps the whole system free
+    -- when nothing is happening.
+    local firstSide, mixed = nil, false
+    for gi = 1, #group do
+      local s = a.pool[group[gi]].side
+      if not firstSide then firstSide = s
+      elseif s ~= firstSide then mixed = true; break end
+    end
+    if mixed then
+      for gi = 1, #group do
+        local ant = a.pool[group[gi]]
+        if ant.hp and ant.hp > 0 then
+          ant.fightT = (ant.fightT or 0) - dt
+          if ant.fightT <= 0 then
+            ant.fightT = (ant.fightT or 0) + cfg.swingPeriod
+            -- STRIKE THE NEAREST ENEMY, not the first one in the list.
+            --
+            -- Picking by pool order made the fight non-spatial: an ant on
+            -- the far rim could be hitting a body on the opposite side of
+            -- the mound while an enemy stood on its head. Nearest means the
+            -- battle happens WHERE THE ANTS ARE -- a column arriving on one
+            -- side engages that side, the fighting visibly concentrates at
+            -- the point of contact, and a flanking send is a real move
+            -- rather than a relabelled reinforcement.
+            --
+            -- Ties resolve by pool index (the `<` keeps the first found),
+            -- so this stays deterministic for a given seed.
+            local target, bestD = nil, math.huge
+            for tj = 1, #group do
+              local t = a.pool[group[tj]]
+              if t.side ~= ant.side and t.hp and t.hp > 0 then
+                local ddx, ddy = t.x - ant.x, t.y - ant.y
+                local d2 = ddx * ddx + ddy * ddy
+                if d2 < bestD then target, bestD = t, d2 end
+              end
+            end
+            if target then
+              -- HALF THE SWINGS MISS. The other half land for 2 or 3,
+              -- scaled by the attacker's atk and the target's def.
+              if a.rng() < cfg.hitChance then
+                local roll = cfg.hitMin
+                          + math.floor(a.rng() * (cfg.hitMax - cfg.hitMin + 1))
+                local dmg = roll * (ant.atk or 1) / (target.def or 1)
+                target.hp = target.hp - dmg
+                -- A LANDED HIT IS AN EVENT THE MIX WANTS. Counted rather
+                -- than played here, because sim/ must never touch audio --
+                -- the audio layer reads the delta each frame and rate-limits
+                -- it into clanks. (A per-hit callback would put a
+                -- love.audio call inside the simulation, which is the wall
+                -- this whole codebase is built around.)
+                a.hits = (a.hits or 0) + 1
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+
+  -- Clear the dead. BACKWARD, because kill() is a swap-remove: forward
+  -- iteration skips an ant every time one dies (the discipline this file
+  -- documents at M.spend).
+  for i = a.n, 1, -1 do
+    local ant = a.pool[i]
+    if ant.hp and ant.hp <= 0 then
+      a.killedInFight = (a.killedInFight or 0) + 1
+      kill(a, i)
+    end
+  end
+
+  -- WHO HOLDS THE GROUND NOW. A mound flips when the last defender falls
+  -- and somebody else is still standing on it. Energy is spent as the
+  -- attackers dig in, so a fortified mound still costs more than an empty
+  -- one -- it is just no longer the whole fight.
+  local W = a.world
+  for k = 1, #ids do
+    local id = ids[k]
+    local site = W.node and W.node[id]
+    if site and site.owner then
+      local defenders, attacker = 0, nil
+      for i = 1, a.n do
+        local ant = a.pool[i]
+        if ant.at == id then
+          if ant.side == site.owner then defenders = defenders + 1
+          elseif not attacker then attacker = ant.side end
+        end
+      end
+      if defenders == 0 and attacker then
+        -- THE QUEEN IS THE MOUND. While she lives it is still theirs, however
+        -- many enemy ants are standing on the surface -- so an established
+        -- colony cannot be taken by walking in, only by digging her out.
+        -- That is what makes a settled mound worth more than the dirt, and
+        -- what gives a defender something to reinforce toward.
+        local queens = site.queens
+        if queens and #queens > 0 then
+          -- Every attacker present chews on the nearest queen. She has five
+          -- workers' worth of body (cfg.queenHp), so this is a real siege
+          -- rather than a formality -- and the more ants you brought, the
+          -- faster she falls, which is the pressure the whole assault is for.
+          local swings = 0
+          for i = 1, a.n do
+            local ant = a.pool[i]
+            if ant.at == id and ant.side ~= site.owner then
+              ant.fightT = (ant.fightT or 0) - dt
+              if ant.fightT <= 0 then
+                ant.fightT = (ant.fightT or 0) + cfg.swingPeriod
+                swings = swings + 1
+                if a.rng() < cfg.hitChance then
+                  local roll = cfg.hitMin
+                            + math.floor(a.rng() * (cfg.hitMax - cfg.hitMin + 1))
+                  local q = queens[1]
+                  q.hp = (q.hp or cfg.queenHp) - roll * (ant.atk or 1)
+                  a.hits = (a.hits or 0) + 1
+                end
+              end
+            end
+          end
+          -- She falls, and her chamber with her. Removing her from the FRONT
+          -- keeps the remaining queens' brood attribution stable (a larva
+          -- records the index of the queen that laid it).
+          if (queens[1].hp or 0) <= 0 then
+            table.remove(queens, 1)
+            a.queensKilled = (a.queensKilled or 0) + 1
+            -- SHE IS A MEAL. A dead queen is the biggest single piece of
+            -- food on the board -- more than an aphid, more than a spider's
+            -- leg -- which is what makes storming a colony pay for the ants
+            -- it cost rather than just denying them to somebody else.
+            --
+            -- Banked to the ATTACKER through the same accumulator a carried
+            -- item uses, so it lands in their pool on the next sweep and the
+            -- food ledger still closes.
+            M.bank(a, attacker,
+                   (attacker == M.YOU) and cfg.queenFood or cfg.queenFoodRivals)
+            -- Her brood dies with her: there is nobody left to tend it.
+            if #queens == 0 then site.brood = {} end
+          end
+        else
+          -- NO QUEEN LEFT: now the ground itself changes hands. Energy is
+          -- what an uncolonised position costs to dig into.
+          site.energy = (site.energy or 0) - dt * 4
+          if site.energy <= 0 then
+            site.owner, site.energy = attacker, 0
+          end
+        end
+      end
+    end
   end
 end
 

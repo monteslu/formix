@@ -59,6 +59,12 @@ local COOLDOWN = {
   season = 0.0,
   threat = 1.5,
   deliver = 0.22,
+  -- EVERY ANT SWINGS ONCE A SECOND and half of those land, so a
+  -- twenty-a-side battle generates ~20 hits a second. Unlimited, that is
+  -- white noise; one clank per 70ms is dense enough to read as a scrap and
+  -- sparse enough to stay a sound. The DROP-don't-queue rule above is what
+  -- keeps a finished battle from clattering on afterwards.
+  clank = 0.07,
 }
 local lastPlayed = {}
 
@@ -108,7 +114,7 @@ function M.init()
   end
 
   for _, name in ipairs({ "link", "refuse", "discover", "season", "threat",
-                          "deliver" }) do
+                          "deliver", "clank" }) do
     sfx[name] = tryLoad("sounds/" .. name .. ".ogg")
     lastPlayed[name] = -99
   end
@@ -226,9 +232,31 @@ end
 -- Rather than delete the mixer, its update stands down until the new game
 -- grows its own reasons to make noise -- the beds and one-shots are all
 -- still here.
+local lastHits = 0
+
 function M.update(snap, dt)
   if not M.enabled then return end
   time = time + dt
+
+  -- ── COMBAT: a clank per landed blow, within reason ──
+  --
+  -- The sim counts hits; this turns the RATE into sound. Volume follows how
+  -- big the scrap is, so two ants scuffling is a tick and a twenty-a-side
+  -- assault is a proper clatter -- rule 2 of this file (per-ant events are
+  -- rate limited, and what you hear is the rate rather than each unit).
+  --
+  -- The counter only ever grows, so a level change resets it below rather
+  -- than firing a burst for a battle on a map that no longer exists.
+  local hits = snap.hits or 0
+  if hits < lastHits then
+    lastHits = hits            -- new world; do not replay the old one's war
+  elseif hits > lastHits then
+    local d = hits - lastHits
+    lastHits = hits
+    -- Louder for a bigger exchange, but never a notification: this tops out
+    -- well under the one-shots that mean the player did something.
+    M.play("clank", math.min(0.55, 0.22 + d * 0.05))
+  end
 
   -- ── MUSIC: are we at war? ──
   --
@@ -237,18 +265,45 @@ function M.update(snap, dt)
   -- back, and that seam is audible -- the same reason the seasonal beds
   -- are never stopped either.
   --
-  -- "At war" is deliberately generous: an enemy you can SEE, or one that
-  -- holds ground next to yours. TENSE_HOLD keeps the track up for a while
-  -- after the last hostile thing, or a brief skirmish would flicker the
-  -- music back and forth.
+  -- WAR IS A FIGHT, NOT A NEIGHBOUR.
+  --
+  -- This used to be true for any enemy mound that was `observed` -- and
+  -- `observed` is set every tick for every neighbour of one of your queened
+  -- colonies (sim/init.lua). So on any map where red holds ground next to
+  -- yours, which is most of them after the opening, the flag was
+  -- PERMANENTLY true and the skirmish track simply never ended. It read as
+  -- music that would not stop, because that is exactly what it was.
+  --
+  -- The honest question is whether a fight is happening: are your ants at
+  -- an enemy mound, or enemy ants at yours. `contested` already answers the
+  -- first (it is set for any mound your ants are inbound to, and cleared
+  -- every tick when they are not), and a hostile ant standing on ground you
+  -- hold answers the second. Both end when the fighting does.
+  --
+  -- TENSE_HOLD still keeps the track up for a while after the last hostile
+  -- thing, so a brief skirmish does not flicker the music back and forth --
+  -- but now it actually expires.
   local hostile = false
   local w = snap.world
   if w then
     for i = 1, #w.nodes do
       local n = w.nodes[i]
-      if n.owner and n.owner ~= "you" and (n.observed or n.held) then
+      -- You are assaulting them: your column is inbound to their ground.
+      if n.contested and n.owner and n.owner ~= "you" then
         hostile = true
         break
+      end
+    end
+    if not hostile and snap.agents then
+      -- ...or they are on top of you: an enemy ant standing on a mound you
+      -- hold. That is a raid in progress and it should sound like one.
+      local a = snap.agents
+      for i = 1, a.n do
+        local ant = a.pool[i]
+        if ant.side ~= "you" and ant.at then
+          local site = w.node and w.node[ant.at]
+          if site and site.owner == "you" then hostile = true; break end
+        end
       end
     end
   end

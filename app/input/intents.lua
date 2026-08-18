@@ -102,24 +102,42 @@ M.fractionFromDrag = fractionFromDrag
 -- Leaving them out of here (and out of pickDirectional below) makes food
 -- visible on the map and untouchable by either input device, which is
 -- the same class of bug as the cursor that could not leave its mound.
-local function pickNode(world, wx, wy, radius)
-  local best, bestD = nil, radius * radius
-  for i = 1, #world.nodes do
-    local n = world.nodes[i]
-    if n.seen then
-      local dx, dy = n.x - wx, n.y - wy
-      local d = dx * dx + dy * dy
-      if d < bestD then best, bestD = n.id, d end
-    end
+-- HIT THE THING YOU CAN SEE, at every zoom.
+--
+-- `slack` is a forgiveness margin in SCREEN pixels (a fingertip is fat and a
+-- mouse is not perfectly steady); each site's own radius is what actually
+-- decides the target.
+--
+-- The old rule was a flat `120 / zoom` world-unit radius for everything,
+-- which scaled BACKWARDS against the thing being clicked. Measured against
+-- the real mound radii (56 small, 78 plain, 118 home):
+--   * zoomed out to 0.20 a small mound had a 10.7x grab radius, so a click
+--     on open ground several mound-widths away silently selected it;
+--   * zoomed in to 1.50 a home mound got 0.68x, so clicks well inside the
+--     drawn hill missed it entirely.
+-- Both read as "the game ignored my click" or "the game selected the wrong
+-- thing", and both get worse the further you are from the default zoom --
+-- which is exactly the complaint that arrives once zoom is usable.
+--
+-- Now the hit area IS the drawn shape plus a constant screen-space margin,
+-- so what you click is what you see however far in or out you are.
+local function pickNode(world, wx, wy, slack)
+  local best, bestD = nil, math.huge
+  local function consider(n)
+    if not n.seen then return end
+    -- The mound's own size, plus the same forgiveness for everyone. `slack`
+    -- arrives in world units (the caller divides by zoom once), so the
+    -- margin is a constant number of PIXELS at any scale.
+    local r = (n.radius or 60) * 1.15 + slack
+    local dx, dy = n.x - wx, n.y - wy
+    local d = dx * dx + dy * dy
+    -- Nearest CENTRE among the things actually hit, so two overlapping
+    -- rings resolve to the one you aimed at rather than to whichever came
+    -- first in the list.
+    if d <= r * r and d < bestD then best, bestD = n.id, d end
   end
-  for i = 1, #(world.locs or {}) do
-    local l = world.locs[i]
-    if l.seen then
-      local dx, dy = l.x - wx, l.y - wy
-      local d = dx * dx + dy * dy
-      if d < bestD then best, bestD = l.id, d end
-    end
-  end
+  for i = 1, #world.nodes do consider(world.nodes[i]) end
+  for i = 1, #(world.locs or {}) do consider(world.locs[i]) end
   return best
 end
 
@@ -632,7 +650,12 @@ local function updatePointer(world, agents)
     -- WAS down is processed one more time or its release is never seen.
     if (not lensOnly) and (p.active or p.prevDown) then
       local wx, wy = vp.screenToWorld(p.x, p.y)
-      local pickR = 120 / vp.cam.zoom
+      -- A CONSTANT FORGIVENESS IN PIXELS, converted to world units once.
+      -- 26px is about a fingertip's slop; pickNode adds it to each site's
+      -- OWN radius, so the hit area tracks the drawn shape at every zoom
+      -- instead of being a fixed world-space disc that is far too big when
+      -- you are zoomed out and too small when you are zoomed in.
+      local pickR = 26 / vp.worldScale()
 
       if p.down and not p.prevDown then
         p.downX, p.downY = p.x, p.y
@@ -735,6 +758,32 @@ local function updatePointer(world, agents)
         local moved = math.abs(p.x - p.downX) + math.abs(p.y - p.downY)
         if moved > DRAG_SLOP then p.dragging = true end
         if p.dragging and M.selected == p.startNode then
+          -- THE GROUND MUST NOT MOVE WHILE YOU ARE AIMING AT IT.
+          --
+          -- `camHeld` used to be set only by the PAN drag below, on the
+          -- reading that a send is not a camera gesture. But a send drag
+          -- moves the cursor as the finger crosses each site (three lines
+          -- down), and every cursor change restarts main.lua's 45-frame
+          -- follow window -- so the nudge scrolled the view UNDER the
+          -- finger for the whole drag, and the drop landed on world ground
+          -- the player was never pointing at.
+          --
+          -- Measured on the bridge gate: a drag from n1 (world 0) to n2
+          -- (world 1900) released at world 2145, because the cursor hop to
+          -- the grain patch halfway had dragged the camera 245 units east
+          -- mid-gesture. The mound is 78 units across; the drop missed it
+          -- by three mound-widths and the order was silently never emitted.
+          --
+          -- This was ALWAYS wrong and was merely invisible: the old flat
+          -- `120/zoom` pick radius came to 286 world units at the default
+          -- zoom, which happened to be wider than the 245 of drift, so the
+          -- misaimed drop still landed inside the target's grab circle.
+          -- Sizing the hit area to the drawn shape removed the cushion and
+          -- exposed the drift underneath it. The camera moving under an
+          -- aimed gesture is the bug; the generous radius was hiding it.
+          --
+          -- A drag is the player driving, whichever gesture it becomes.
+          M.camHeld = true
           -- THE GAUGE: how far you have pulled sets how many go.
           local dx, dy = p.x - p.downX, p.y - p.downY
           M.fraction = fractionFromDrag(math.sqrt(dx * dx + dy * dy),

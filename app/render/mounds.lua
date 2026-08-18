@@ -195,7 +195,21 @@ function M.draw(snap, vp, intents)
       -- `held` (one of your ants present) still counts, so a squad that
       -- has just walked onto neutral dirt warms it immediately -- that is
       -- what reveals a mound you are exploring.
-      local inhabited = n.held or (#(n.queens or {}) > 0 and n.owner == "you")
+      -- `n.contested` is the third way in, and it is about a FIGHT rather
+      -- than about knowledge: a mound you are assaulting right now. An
+      -- attacker dies on arrival against a defended hill, so it never
+      -- stands there and `held` never becomes true however many ants you
+      -- spend -- which is why an assault used to look like your army
+      -- dissolving into featureless grey stone. It clears the moment the
+      -- assault does, so this stays a rule about presence.
+      --
+      -- (A permanent "once seen, always known" latch was tried here and
+      -- REVERTED: it kept every mound you had ever touched warm forever,
+      -- which is a different game. `test-grey` caught it -- a mound whose
+      -- ants all left must go back to stone, because in this game the
+      -- coloured ground IS the ground you hold.)
+      local inhabited = n.held or n.contested
+                     or (#(n.queens or {}) > 0 and n.owner == "you")
 
       -- Excavated grit around the base: an ant hill is a pile of stuff
       -- brought UP, and the spill is what makes it read as earth rather

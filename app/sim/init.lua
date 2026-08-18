@@ -130,7 +130,7 @@ local function buildMap(w, rng, opts)
 
   -- Home first, at the origin.
   local home = W.addNode(w, "home", 0, 0,
-                         { owner = "you", queens = { { layTimer = 0 } }, seen = true })
+                         { owner = "you", queens = { A.newQueen() }, seen = true })
   w.homeId = home.id
   placed[#placed + 1] = home
 
@@ -307,6 +307,10 @@ function M.updateVision(s)
     n.seen = true          -- the shape of the field is never hidden
     n.observed = false     -- can you see who is on this mound
     n.lit = false          -- is this mound's radius out of the fog
+    -- ARE YOU ATTACKING IT THIS INSTANT? Recomputed every tick, unlike
+    -- `found`, because a fight is a moment and not a fact you learn: the
+    -- reveal has to end when the assault does.
+    n.contested = false
   end
   -- LOCATIONS FOG THE SAME WAY, and what theirs hides is the KIND. An
   -- unvisited location is an anonymous grey clump: you cannot tell
@@ -364,6 +368,23 @@ function M.updateVision(s)
   -- ground adjacent to an enemy colony and not notice it -- which reads as
   -- the discovery being broken rather than as a rule about queens.
   for i = 1, #s.world.nodes do s.world.nodes[i].held = false end
+  -- WHERE YOUR ANTS ARE HEADED IS SOMEWHERE YOU CAN SEE.
+  --
+  -- An ant walking at a defended mound dies the instant it arrives, so it
+  -- never stands there: `held` stays false, `found` never latches, and the
+  -- garrison killing it was drawn by nothing. This marks the DESTINATION of
+  -- every column in flight, which is exactly the ground a player is
+  -- currently paying attention to and paying ants for.
+  for i = 1, s.agents.n do
+    local ant = s.agents.pool[i]
+    if ant.side == A.YOU and not ant.at and ant.to then
+      local d = W.site(s.world, ant.to)
+      if d then
+        d.contested = true
+        d.observed = true
+      end
+    end
+  end
   for i = 1, s.agents.n do
     local ant = s.agents.pool[i]
     if ant.side == A.YOU and ant.at then
@@ -426,7 +447,7 @@ function M.apply(s, intent)
     -- (eleven ants: ten for her, one to harvest) a puzzle worth solving.
     local spent, banked = A.spend(s.agents, n.id, A.YOU, M.cost.queen)
     M.addFood(s, A.YOU, banked)
-    n.queens[#n.queens + 1] = { layTimer = 0 }
+    n.queens[#n.queens + 1] = A.newQueen()
     print(string.format(
       "@queen node=%s spent=%d banked=%d queens=%d garrison=%d food=%d",
       tostring(n.id), spent, banked, #n.queens,
@@ -573,7 +594,22 @@ function M.update(s, dt)
       -- a front mound never sterilises it.
       local crowd = A.garrison(s.agents, n.id, n.owner) + #n.brood
       local full = crowd >= M.food.perQueen * #n.queens
-      for qi = 1, #n.queens do
+      -- TAKE TURNS WHEN THERE IS NOT ENOUGH TO GO ROUND.
+      --
+      -- This loop used to run 1..#queens in fixed order, and every queen
+      -- shares one pantry -- so on a trickle income the FIRST queen reached
+      -- her timer, took the only food, and the others never laid at all. A
+      -- mound with three queens produced exactly as fast as a mound with
+      -- one, which quietly makes the second and third queen (ten ants each)
+      -- a purchase that buys nothing until the colony is already rich.
+      --
+      -- `layStart` walks one place per tick, so whoever went hungry last is
+      -- first in line next time. It is stored on the MOUND (not the queen)
+      -- and advances deterministically, so a replay is unaffected: no clock
+      -- and no rng, which is the sim's standing promise.
+      n.layStart = ((n.layStart or 0) + 1) % #n.queens
+      for k = 1, #n.queens do
+        local qi = ((n.layStart + k - 1) % #n.queens) + 1
         local q = n.queens[qi]
         q.layTimer = (q.layTimer or 0) + dt * rate
         if q.layTimer >= period then
@@ -642,6 +678,11 @@ function M.update(s, dt)
   W.updateLocs(s.world, dt)
 
   A.update(s.agents, dt)
+  -- BATTLES RESOLVE OVER TIME, after everyone has moved. Ants standing on
+  -- the same mound in different colours trade blows until one side is gone;
+  -- see A.fight. Ordering matters only in that arrivals should join the
+  -- fight on the tick they land, which is what running it after update does.
+  A.fight(s.agents, dt)
 
   -- SWEEP THE DELIVERIES. Ants bank what they carried into an
   -- accumulator on the agent pool rather than reaching up into the sim
@@ -709,6 +750,9 @@ function M.snapshot(s)
     food = M.foodOf(s, A.YOU), foodCfg = M.food,
     gameOver = s.gameOver,
     carried = A.carried(s.agents, A.YOU),
+    -- Running total of landed blows. The audio layer diffs it per frame and
+    -- turns the RATE into clanks; the sim never plays a sound itself.
+    hits = s.agents.hits or 0,
   }
 end
 

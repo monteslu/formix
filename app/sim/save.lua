@@ -132,7 +132,7 @@ function M.deserialize(s, text)
         nd.owner = (own == 1) and "you" or (own == 2) and foe or nil
         nd.queens = {}
         for _ = 1, tonumber(f[4]) or 0 do
-          nd.queens[#nd.queens + 1] = { layTimer = 0 }
+          nd.queens[#nd.queens + 1] = A.newQueen()
         end
         nd.growStat  = tonumber(f[5]) or 1
         nd.rangeStat = tonumber(f[6]) or 1

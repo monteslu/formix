@@ -92,7 +92,7 @@ function M.update(r, world, agents, dt, sim)
       if sim and banked > 0 then
         require("sim.init").addFood(sim, r.side, banked)
       end
-      n.queens[#n.queens + 1] = { layTimer = 0 }
+      n.queens[#n.queens + 1] = A.newQueen()
       return
     end
   end

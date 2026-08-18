@@ -275,6 +275,42 @@ def make_deliver(seconds=0.16):
     return out
 
 
+def make_clank(seconds=0.13):
+    """A hit landing in a fight: a short, dry chitinous CLACK.
+
+    Every ant swings once a second and half of those land, so on a big
+    battle this fires many times a second -- which means it has to be
+    SHORT, quiet and non-tonal, or a siege becomes a drum solo. It is
+    built from a fast noise burst through a couple of high resonant
+    partials rather than a pitched tone: mandibles on shell, not a
+    swordfight, and nothing that implies a key the music has to agree
+    with.
+
+    The audio layer rate-limits these on top (see M.clank) -- this is the
+    single hit, not the battle.
+    """
+    n = int(RATE * seconds)
+    # Very fast attack, quick decay: the whole event is over in ~130ms.
+    env = envelope(n, int(RATE * 0.001), int(RATE * 0.11))
+    rng = random.Random(90210)
+    # Two high partials, deliberately inharmonic so it reads as a click
+    # rather than a note.
+    f1, f2 = 2100.0, 3170.0
+    prev = 0.0
+    out = []
+    for i in range(n):
+        t = i / RATE
+        noise = rng.uniform(-1.0, 1.0)
+        # One-pole low-pass on the noise so it is a knock, not a hiss.
+        prev = prev * 0.55 + noise * 0.45
+        body = (math.sin(t * f1 * math.tau) * 0.5
+                + math.sin(t * f2 * math.tau) * 0.3)
+        # The noise dies faster than the partials: a transient with a tail.
+        nEnv = math.exp(-t * 90.0)
+        out.append((prev * nEnv * 0.7 + body * 0.35) * env[i] * 0.45)
+    return out
+
+
 def main():
     here = os.path.dirname(os.path.abspath(__file__))
     outdir = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
@@ -293,6 +329,7 @@ def main():
         ("season.wav", make_season),
         ("threat.wav", make_threat),
         ("deliver.wav", make_deliver),
+        ("clank.wav", make_clank),
     ]
 
     # Encode to ogg when an encoder is available. The engine decodes ogg

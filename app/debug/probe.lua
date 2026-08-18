@@ -61,14 +61,15 @@ function M.reportMounds(S)
     -- assert an attack against.
     local hold = n.owner or "you"
     print(string.format(
-      "@mound %s %s g=%d gi=%d fg=%d q=%d/%d energy=%.0f reach=%.0f seen=%s brood=%d held=%s obs=%s",
+      "@mound %s %s g=%d gi=%d fg=%d q=%d/%d energy=%.0f reach=%.0f seen=%s brood=%d held=%s obs=%s contested=%s",
       n.id, tostring(n.owner), A.garrison(S.agents, n.id, "you"),
       A.garrisonIncoming(S.agents, n.id, "you"),
       A.garrison(S.agents, n.id, hold),
       n.queens and #n.queens or 0, n.maxQueens or 0,
       n.energy or 0, W.reach(n), tostring(n.seen),
       n.brood and #n.brood or 0, tostring(n.held or false),
-      tostring(n.observed or false)))
+      tostring(n.observed or false),
+      tostring(n.contested or false)))
   end
 end
 

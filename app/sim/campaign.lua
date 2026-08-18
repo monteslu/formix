@@ -125,11 +125,21 @@ M.levels = {
       "Send more than they have, and the mound changes hands",
     },
     wakeOnContact = true,
-    -- Red's pantry. She is asleep and laying at a quarter rate, so this
-    -- is what she grows on while you are still finding her -- enough to
-    -- be a colony worth taking seriously when you arrive, not enough to
-    -- have run away with the map.
-    startFood = { red = 60 },
+    -- A BIG ARMY WITH NO SUPPLY LINE. This is the first board with an
+    -- enemy on it, and it should be a fight the player WINS -- the lesson
+    -- is "ground can be taken from someone", not "you are outmatched".
+    --
+    -- So red is dangerous the way a standing garrison is dangerous, not
+    -- the way an economy is: she starts with more ants than you and a
+    -- pantry that runs out. Twelve food is a dozen larvae and then
+    -- nothing, because every location on this map is on the PLAYER's side
+    -- of it. She cannot forage her way back into the game; she can only
+    -- spend what she was given.
+    --
+    -- (Contrast the war map, where both rivals get 90 and a grain patch
+    -- behind each colony. That is the board where the enemy is supposed
+    -- to compound.)
+    startFood = { red = 12 },
     nodes = {
       { kind = "plain", x = 0, y = 0,   own = true, ants = 12, queens = 1 },
       { kind = "small", x = 704, y = -336 },
@@ -152,17 +162,37 @@ M.levels = {
       -- so red sat at thirty ants for the whole exploration and arrived
       -- as the same statue the frozen-rival note warns about. Two queens
       -- over twelve workers leaves room to actually fill up.
-      { kind = "plain", x = 1888, y = -160, foe = "red", ants = 12, queens = 2 },
-      { kind = "small", x = 1520, y = 560,  foe = "red", ants = 5,  queens = 1 },
+      -- MORE BODIES THAN YOU, AND THAT IS THE POINT. Red fields twenty-two
+      -- ants against your twelve, so walking in unprepared loses -- but she
+      -- cannot replace them once the pantry above is gone, and you can.
+      -- The board teaches that an army is something you BUILD toward, and
+      -- it is winnable the moment the player works that out.
+      { kind = "plain", x = 1888, y = -160, foe = "red", ants = 16, queens = 2 },
+      { kind = "small", x = 1520, y = 560,  foe = "red", ants = 6,  queens = 1 },
     },
     -- A SPIDER ON THE WAY TO RED, and this is where a grey clump first
     -- bites. It sits off the direct line rather than blocking it, so
     -- walking into her is a choice the player made about ground that
     -- looked worth having -- and she is worth having: eight legs is a
     -- bigger meal than anything else on the board.
+    -- THE FOOD IS ALL ON YOUR SIDE, and that is the map's whole balance.
+    --
+    -- Red starts bigger but with a pantry that runs dry; you start smaller
+    -- next to two grain patches that never do. Every location sits WEST of
+    -- home, red is far to the east, and the mounds you hold are between
+    -- them -- so for red to reach a food line she would have to take a
+    -- couple of your mounds first, which is a fight she has to win before
+    -- she can afford to fight. In practice she cannot, which is exactly
+    -- the "easy first win" this level is for.
+    --
+    -- Grain rather than aphids for the two near ones, because grain grows
+    -- back: the player's advantage should compound quietly while they work
+    -- out what to do with it.
     locations = {
       { kind = "grain",  x = -420, y = -520, items = 6 },
-      { kind = "aphids", x = 640,  y = 900,  items = 5 },
+      { kind = "grain",  x = -560, y = 620,  items = 6 },
+      { kind = "aphids", x = 208,  y = 1180, items = 5 },
+      -- Still off the road to red: a grey clump that bites, met by choice.
       { kind = "spider", x = 1180, y = -560 },
     },
   },
@@ -513,7 +543,7 @@ function M.build(level, world, W, agents, A)
     })
     if i == 1 then world.homeId = made[i].id end
     for _ = 1, spec.queens or 0 do
-      made[i].queens[#made[i].queens + 1] = { layTimer = 0 }
+      made[i].queens[#made[i].queens + 1] = A.newQueen()
     end
   end
   -- Ants after every mound exists, so spawn can look them up. An ant

@@ -79,11 +79,20 @@ M.KINDS = KINDS
 -- deciding to walk over and find out what it is IS the mechanic.
 local LKINDS = {
   -- Plump, juicy, and worth the walk. A one-off windfall.
-  aphids = { radius = 74, range = 900, items = 6, cap = 6, value = 4 },
+  -- Worth SIX, not four: an aphid cluster is the one-off prize you spend a
+  -- send on, and against grain that regrows forever the windfall has to be
+  -- worth choosing. Six also means one laden ant is most of a larva-and-a-
+  -- half, so a short column visibly moves the counter.
+  aphids = { radius = 74, range = 900, items = 6, cap = 6, value = 6 },
   -- The slow faucet, and the reason a colony need never starve outright:
   -- one food per grain, but they come back.
+  -- TEN SECONDS, not twenty. The faucet was slow enough that a patch left
+  -- alone was barely worth returning to, which pushed every decision back
+  -- onto the one-off windfalls; at ten it refills a visited patch inside
+  -- the time it takes to do something else, so leaving a scout on grain is
+  -- a real option rather than a rounding error.
   grain  = { radius = 80, range = 900, items = 4, cap = 10, value = 1,
-             regrow = 20 },
+             regrow = 10 },
   -- Not a harvest -- a fight. Beat her and the legs are the prize. The
   -- biggest of the three, and deliberately: she should look like trouble
   -- the moment the fog lifts off her.
