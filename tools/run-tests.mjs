@@ -16,7 +16,7 @@ if (existsSync('app/startlevel')) {
   console.error('marker and rebuild:  rm app/startlevel && ./build.sh');
   process.exit(2);
 }
-const suites = ['test-reachable', 'test-queen', 'test-grey', 'test-gameplay',
+const suites = ['test-reachable', 'test-overlap', 'test-queen', 'test-grey', 'test-gameplay',
                 'test-longrun', 'test-deadend', 'test-strand',
                 'test-campaign', 'test-render', 'test-camera',
                 // THE CART-REBUILDING GATES GO LAST, all of them. test-war

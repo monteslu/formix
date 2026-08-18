@@ -242,8 +242,21 @@ function M.draw(vp, snap, intents)
     -- add it up rather than eyeballing it.
     local fSmall = fonts.get(vp, 17)
     local lh = fSmall:getHeight()
-    local ICONH = BTN * 0.52
-    local BTNH = ICONH + lh * 2 + vp.u(26)
+    -- TALLER, on request ("queen and brood label and cost look a little
+    -- crowded"). ICONH grew from 0.52 to 0.62 of the button width, which
+    -- pushes the whole text block down and gives the icon itself more
+    -- air below it -- the queen icon's abdomen+egg reach 0.82 * icon-size
+    -- below its own centre, so the old 0.52 left barely a name's cap-
+    -- height of clearance before "queen" printed.
+    local ICONH = BTN * 0.62
+    -- GAP is real breathing room between the name and its cost line,
+    -- not just whatever the font's own line-height happens to leave.
+    -- Widened from a first pass at 6px, which was not enough to read as
+    -- SPACING rather than as a slightly-generous line height -- 6px is
+    -- under a third of lh, so the two lines still read as one crowded
+    -- block. 12px is closer to a whole blank line between them.
+    local GAP = vp.u(12)
+    local BTNH = ICONH + lh * 2 + GAP + vp.u(26)
     local bx0 = x + pad
     local by0 = ty + vp.u(4)
     local slot = 0
@@ -294,7 +307,7 @@ function M.draw(vp, snap, intents)
       local note = "cost " .. (kind == "queen" and qCost or uCost)
       g.setColor(0.66, 0.62, 0.46, affordable and 0.92 or 0.8)
       g.print(note, bx + (BTN - fSmall:getWidth(note)) * 0.5,
-              by + vp.u(9) + ICONH + lh)
+              by + vp.u(9) + ICONH + lh + GAP)
       -- The pad letter sits in the corner, small: a controller player
       -- triggers this with a press and never has to aim at it.
       g.setColor(0.70, 0.86, 0.68, affordable and 0.8 or 0.35)

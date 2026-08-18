@@ -57,7 +57,14 @@ M.levels = {
     -- the number, which is what makes the lesson land.
     locations = {
       { kind = "aphids", x = -260, y = -760, items = 4 },
-      { kind = "aphids", x = 880,  y = 300,  items = 4 },
+      -- Moved off (880,300): the rich mound sits at (1024,400) with a
+      -- 104-unit radius, and an aphid patch's own radius is 74 -- 175
+      -- units apart, their circles overlapped by 3. Small in world
+      -- units, real on screen: the mound's earth fill and grit spill
+      -- draw past its bare radius, so the aphids sat partly on top of
+      -- the hill. Caught by tools/test-overlap.mjs, which checks every
+      -- hand-built level for exactly this.
+      { kind = "aphids", x = 700,  y = 700,  items = 4 },
     },
   },
   {
