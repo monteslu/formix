@@ -78,7 +78,25 @@ export function readPNG(path) {
 
   return {
     w, h,
+    // FRACTIONAL COORDINATES ARE A BUG, NOT A SAMPLE. A non-integer x/y
+    // makes `i` fractional, a typed array returns `undefined` for it, and
+    // every comparison against that `undefined` is false -- so a gate
+    // measuring with fractional radii counts ZERO and reports it as
+    // "the thing I was looking for is not there".
+    //
+    // test-siege lost a working feature to exactly this for two plans:
+    // its band radii were fractional (32.76 * 0.30), its loop stepped by
+    // 1 from a fractional bound, and "inner=0 outer=0" was read as a
+    // clustering regression when it meant "this never read a pixel".
+    // Throwing is right: a measurement that cannot be taken must not be
+    // reported as a measurement of zero.
     at(x, y) {
+      if (!Number.isInteger(x) || !Number.isInteger(y)) {
+        throw new Error(
+          `png.at() needs INTEGER pixel coordinates, got (${x}, ${y}). ` +
+          `Fractional coords silently read undefined and count as zero -- ` +
+          `round or Math.ceil your loop bounds.`);
+      }
       const i = y * stride + x * channels;
       return [out[i], out[i + 1], out[i + 2]];
     },

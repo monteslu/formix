@@ -252,8 +252,22 @@ let r = await d.inspect();
 {
   await d.boot(7);
   // Pan as hard as possible, repeatedly, in one direction.
+  //
+  // START ON OPEN GROUND, NOT ON A PANEL. (1700, 900) sits INSIDE the
+  // minimap's rect (bottom-right, 370x248 at a 28px margin), so this
+  // "drag" was a minimap JUMP -- the camera teleports to the tapped
+  // world position -- and never exercised the pan clamp it is named
+  // for. It passed only because the old minimap geometry happened to
+  // map that point under the 12000 threshold; resizing the panel moved
+  // the same screen point to a different world position and the number
+  // changed, which is how a gate that was measuring the wrong thing
+  // finally said so.
+  //
+  // (1400, 700) is clear of all three UI rects: the node panel
+  // (bottom-left), the minimap (bottom-right) and the settings gear
+  // (top-right).
   for (let i = 0; i < 6; i++) {
-    await d.drag(1700, 900, 200, 120, 3);
+    await d.drag(1400, 700, 200, 120, 3);
   }
   const far = await d.inspect();
   // Gather's mounds span roughly +/-1200 world units. A clamp that works

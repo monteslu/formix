@@ -116,10 +116,24 @@ async function freshDump(t, d) {
     // -- g is ~71% of r -- while the mound fill's g sits at ~50% of r.
     // Ant ink, measured live: 230,163,66 (g/r=0.71) and 255,173,66
     // (g/r=0.68). Mound fill: 138,70,44 (g/r=0.51).
+    // INTEGER PIXEL OFFSETS, ALWAYS. The band radii are fractional
+    // (32.76 * 0.30 = 9.83), and looping `for (let dy = -rOut; ...; dy++)`
+    // walks -9.83, -8.83, ... -- every offset fractional, so `cx + dx` is
+    // a non-integer index, `at()` computes a fractional buffer offset,
+    // and a typed array returns `undefined` for it. `undefined > 150` is
+    // false, so EVERY sample missed and both bands read 0.
+    //
+    // That is what "inner=0 outer=0" meant for as long as this gate has
+    // been failing: not "the ants are not clustered" but "this function
+    // never read a single pixel". Measured on the same capture with an
+    // integer sweep, the besieging column is tightly clustered at 0-11px
+    // from the centre -- exactly what the assertion below claims -- so
+    // the FEATURE was right the whole time and the ruler was broken.
     function ringPixels(rIn, rOut) {
       let n = 0;
-      for (let dy = -rOut; dy <= rOut; dy++) {
-        for (let dx = -rOut; dx <= rOut; dx++) {
+      const lim = Math.ceil(rOut);
+      for (let dy = -lim; dy <= lim; dy++) {
+        for (let dx = -lim; dx <= lim; dx++) {
           const d2 = dx * dx + dy * dy;
           if (d2 < rIn * rIn || d2 > rOut * rOut) continue;
           const x = cx + dx, y = cy + dy;

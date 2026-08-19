@@ -190,7 +190,7 @@ function M.draw(snap, vp, intents)
 
   local x, y = vp.worldToScreen(cur.x, cur.y)
   local r = visualR(cur) * s * 1.20
-  local f = fonts.get(vp, 24)
+  local f = fonts.get(vp, 20)
   g.setFont(f)
   local w = f:getWidth(msg)
   local hx, hy = x - w * 0.5, y + r + vp.u(14)

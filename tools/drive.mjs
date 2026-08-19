@@ -5,6 +5,10 @@
 // game that was receiving no input at all.
 const U = 'http://127.0.0.1:7331';
 
+import { existsSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+
 export function api(session) {
   // RETRY ON TRANSPORT FAILURE ONLY. The server drops a connection now and
   // then when suites run back to back (ECONNRESET); that is a harness
@@ -36,6 +40,18 @@ export function api(session) {
   return call;
 }
 
+// A 4096-byte run of zeros -- the cart's whole save region, empty.
+// GENERATED rather than committed: it is 4096 zeros, it can never drift,
+// and a binary blob in the tree invites someone to wonder what is in it.
+// Written once per process into the OS temp dir, not beside the cart --
+// a file next to a tracked fixture is exactly the trap that broke
+// romdev's own suite when SRAM persistence first shipped to disk.
+const BLANK_SRAM = (() => {
+  const p = join(tmpdir(), 'formix-blank-sram.sav');
+  if (!existsSync(p)) writeFileSync(p, Buffer.alloc(4096));
+  return p;
+})();
+
 export function driver(t, cartPath) {
   let banked = [];
   const drain = async () => {
@@ -55,6 +71,36 @@ export function driver(t, cartPath) {
     async boot(seed = 7, opts = {}) {
       banked = [];
       await t('loadMedia', { platform: 'wasmcart', path: cartPath, deterministicSeed: seed });
+      // START FROM AN EMPTY SAVE, ALWAYS.
+      //
+      // romdev 0.120.0 made wasmcart SRAM PERSIST across loadMedia (an
+      // in-process cache keyed by cart path). That is the fix this game
+      // asked for -- plan 06's progress record is unprovable without it,
+      // and a player reloading a cart should keep their colony. But it
+      // silently changed what boot() MEANS for a gate: every reload used
+      // to hand back a pristine Gather, and now it hands back whatever
+      // the previous gate (or the previous SESSION) left behind.
+      //
+      // Measured when it first bit: a suite run where test-gameplay's
+      // sends were refused (`ok=false n=1`), test-longrun's ant
+      // conservation reported 12 ants against 6+7 garrisons, test-strand
+      // booted `ants=1 queens=0`, and test-campaign failed every
+      // assertion -- all of them inheriting one stale `v 6` colony blob
+      // with 330 seconds on its clock. None of it was a game bug, and
+      // every failure pointed somewhere other than the save.
+      //
+      // So the gates declare what they need instead of inheriting it: a
+      // gate asserts on a FRESH campaign, and the one thing that must
+      // survive a reload (the progress record) is proved by writing it
+      // and reloading DELIBERATELY, not by whatever happened to be in
+      // the cache. Pass `keepSave:true` to opt into the persistence --
+      // that is the flag a reload assertion uses.
+      if (!opts.keepSave) {
+        await t('state', { op: 'importSram', path: BLANK_SRAM });
+        // The cart reads its save at init, so the wipe has to be in place
+        // BEFORE the boot it should affect -- reload after importing.
+        await t('loadMedia', { platform: 'wasmcart', path: cartPath, deterministicSeed: seed });
+      }
       await t('frame', { op: 'step', frames: 60 });
       await drain();
       const want = opts.level === undefined ? 'gather' : opts.level;
@@ -126,6 +172,18 @@ export function driver(t, cartPath) {
       return drain();
     },
     // The overlay dump: node screen positions + per-mound state.
+    // TOGGLE ON, READ, TOGGLE OFF. This assumes the overlay is DOWN on
+    // entry, which is the contract every gate follows: a gate that raises
+    // the overlay for a SELECT+button instrument lowers it again before
+    // inspecting.
+    //
+    // An earlier plan-06 attempt made this "parity-independent" by
+    // toggling until a dump arrived. That broke MORE than it fixed: the
+    // number of SELECT presses inspect() issues is itself load-bearing
+    // for any gate that brackets it with its own overlay presses, and
+    // test-queen's SELECT+Y food grant started being refused because the
+    // overlay ended up down when the grant fired. Predictable parity
+    // beats clever recovery here.
     async inspect() {
       await t('input', { op: 'press', button: 'select', frames: 6 });
       await t('frame', { op: 'step', frames: 40 });
@@ -209,7 +267,26 @@ export function driver(t, cartPath) {
                       cursor: m[3] === 'nil' ? null : m[3],
                       selected: m[4] === 'nil' ? null : m[4], frac: +m[5] };
       }
-      return { pos, mound, loc, cam, ui, corpses, spider };
+      // PLAN 06: the level select and the win dialog, plus the select's
+      // row list. `rows` decodes as id:<C|->{B|-}{L|-} -- continue,
+      // beaten, locked -- which is the state no screenshot can report.
+      let ui2 = null;
+      for (const l of lines) {
+        const m = l.match(/^@ui2 select=(\w+) selrow=(\d+) celebrate=(\w+) celrow=(\d+) rows=(.*)$/);
+        if (m) {
+          const rows = [];
+          if (m[5] && m[5] !== 'none') {
+            for (const tok of m[5].trim().split(/\s+/)) {
+              const q = tok.match(/^(\S+):(.)(.)(.)$/);
+              if (q) rows.push({ id: q[1], continue: q[2] === 'C',
+                                 beaten: q[3] === 'B', locked: q[4] === 'L' });
+            }
+          }
+          ui2 = { select: m[1] === 'true', selrow: +m[2],
+                  celebrate: m[3] === 'true', celrow: +m[4], rows };
+        }
+      }
+      return { pos, mound, loc, cam, ui, ui2, corpses, spider };
     },
     async metric() {
       await t('frame', { op: 'step', frames: 32 });

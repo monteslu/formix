@@ -12,9 +12,15 @@ local probe   = require("debug.probe")
 local audio   = require("audio.init")
 local save    = require("sim.save")
 local menu    = require("ui.menu")
+local progress = require("sim.progress")
+local levelsel = require("ui.levelselect")
+local celebrate = require("ui.celebrate")
 
 local S
 local booted = false
+-- True when an `app/startlevel` marker chose the board, which suppresses
+-- the level-select screen (a gate must land on its fixture, not a menu).
+local startLevelForced = false
 -- The cursor-follow window: see the nudge in love.update.
 local lastCursor = nil
 local followFrames = 0
@@ -53,10 +59,19 @@ function love.load()
   -- unlike a host flag, which the cart cannot see. (`opengarden` is the
   -- same idea and had been dead since it was added: build.sh wrote it and
   -- nothing ever read it, so --open silently packed an ordinary cart.)
+  -- WHICH LEVELS HAVE BEEN BEATEN (plan 06). Loaded before anything can
+  -- ask, and from its own file -- see sim/progress.lua for why it is not
+  -- part of the colony blob.
+  progress.load()
+
+  -- A gate cart packed with `startlevel` must boot STRAIGHT into that
+  -- board: a level-select screen in front of it would swallow the first
+  -- inputs of every suite that packs its own fixture.
+  startLevelForced = false
   if love.filesystem.getInfo then
     if love.filesystem.getInfo("startlevel") then
       local want = (love.filesystem.read("startlevel") or ""):gsub("%s+", "")
-      if want ~= "" then levelId = want end
+      if want ~= "" then levelId = want; startLevelForced = true end
     elseif love.filesystem.getInfo("opengarden") then
       levelId = nil          -- nil selects the generated field
     end
@@ -81,6 +96,39 @@ function love.load()
   audio.init()
   probe.init(S)
   booted = true
+
+  -- THE LEVEL SELECT (plan 06), after the world is built, never instead
+  -- of building one. The screen is drawn OVER a live colony rather than
+  -- replacing it, so dismissing it always lands somewhere playable --
+  -- there is no state in which the player is looking at a menu with no
+  -- game behind it.
+  --
+  -- Skipped entirely on a true first boot (nothing beaten, nothing to
+  -- continue): one playable level and no decision to make.
+  if not startLevelForced and levelsel.shouldShow() then
+    levelsel.build()
+    levelsel.open = true
+  end
+end
+
+-- Rebuild the world for a level, between frames. Shared by the level
+-- select and the celebration's "next level" -- both want exactly this,
+-- and doing it in two places is how one of them ends up forgetting to
+-- reset the intents or re-init the probe.
+local function startLevel(levelId, keepSave)
+  S = sim.new(math.floor(love.math.random() * 2147483000) + 1, levelId)
+  if keepSave then
+    local blob = save.read()
+    if blob then
+      local ok = save.deserialize(S, blob)
+      if not ok then S = sim.new(math.floor(love.math.random() * 2147483000) + 1, levelId) end
+    end
+  end
+  local home = S.world.node[S.world.homeId]
+  if home then vp.centreOn(home.x, home.y) end
+  intents.reset()
+  probe.init(S)
+  print("@level started " .. tostring(levelId))
 end
 
 function love.update()
@@ -98,15 +146,44 @@ function love.update()
   if menu.wantNextLevel then
     menu.wantNextLevel = false
     local nextId = S.nextLevelId
-    if nextId then
-      S = sim.new(math.floor(love.math.random() * 2147483000) + 1, nextId)
-      local home = S.world.node[S.world.homeId]
-      if home then vp.centreOn(home.x, home.y) end
-      intents.reset()
-      probe.init(S)
-      print("@level started " .. tostring(nextId))
-    end
+    if nextId then startLevel(nextId) end
   end
+
+  -- PLAN 06: the same rebuild, asked for by the celebration dialog or by
+  -- the level select. Both are consumed here, between frames, for the
+  -- reason above -- rebuilding mid-frame strands every ant on an edge.
+  if celebrate.wantNext then
+    celebrate.wantNext = false
+    local nextId = S.nextLevelId
+    if nextId then startLevel(nextId) end
+  end
+  if levelsel.wantLevel then
+    local id = levelsel.wantLevel
+    levelsel.wantLevel = nil
+    startLevel(id)
+  end
+  if levelsel.wantContinue then
+    levelsel.wantContinue = false
+    -- Resume the autosaved colony exactly as an ordinary boot does. The
+    -- blob names its own level (save.lua's `level` line means the CURRENT
+    -- board again since plan 06), so this rebuilds that board and
+    -- overlays the saved state onto it.
+    local blob = save.read()
+    local lv = blob and save.peekLevel(blob)
+    if lv then startLevel(lv, true) end
+  end
+
+  -- THE WIN, ONCE (plan 06). `levelJustDone` is set on the rising edge in
+  -- sim.update; consuming it here means the dialog fires exactly once per
+  -- completion rather than every frame the level stays finished.
+  if S.levelJustDone then
+    S.levelJustDone = false
+    -- Seeded from the sim's own clock so a deterministic replay shows the
+    -- same confetti -- see ui/celebrate.lua's note.
+    celebrate.show(vp, S.level and S.level.name or "",
+                   math.floor((S.time or 0) * 1000) + 7919)
+  end
+  celebrate.update(DT)
 
   -- So START can mean "next field" on a finished level (see intents).
   intents.levelDone = S.levelDone and S.nextLevelId ~= nil
@@ -204,6 +281,10 @@ function love.draw()
 
   local render = require("render.init")
   render.draw(sim.snapshot(S), vp, intents)
+  -- OVER the world and the HUD, under the developer overlay: these are
+  -- the two screens that are meant to interrupt.
+  celebrate.draw(vp)
+  levelsel.draw(vp)
   probe.draw(S, vp, intents)
 end
 

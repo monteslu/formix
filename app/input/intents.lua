@@ -255,6 +255,61 @@ local function updatePad(world, agents)
   end
   local function pressed(b) return padNow[b] and not padPrev[b] end
 
+  -- PLAN 06: the level select and the win dialog take the pad FIRST, and
+  -- swallow everything -- an A press that both confirms a menu row and
+  -- sends an army is the class of bug the menu block below already
+  -- exists to prevent. Select is checked before celebrate so that, on the
+  -- boot after a win, the screen the player is actually looking at is the
+  -- one the buttons drive.
+  local levelsel = require("ui.levelselect")
+  -- Same rule as the celebration card below: while SELECT is HELD this
+  -- screen does not consume the press, so every SELECT+button instrument
+  -- stays reachable. A bare SELECT still toggles the overlay, which is
+  -- what makes this screen visible to a gate at all (`@ui2` only prints
+  -- from the overlay dump).
+  if levelsel.open and not padNow.select then
+    if pressed("up") then levelsel.handle("up") end
+    if pressed("down") then levelsel.handle("down") end
+    if pressed("a") then levelsel.handle("confirm") end
+    if pressed("b") then levelsel.handle("cancel") end
+    -- THE OVERLAY TOGGLE FIRES ON RELEASE (see the block at the bottom of
+    -- this function), and returning here would swallow that release --
+    -- which is how the developer overlay became unreachable while these
+    -- screens were up, and with it every gate's `inspect()`. Reproduce
+    -- the release check rather than falling through, because everything
+    -- between here and there is ordinary-play input this screen must
+    -- still consume.
+    if padPrev.select and not padNow.select then
+      if not M.comboUsed then emit("debug", { what = "overlay" }) end
+      M.comboUsed = false
+    end
+    return
+  end
+  local celebrate = require("ui.celebrate")
+  -- SELECT IS THE DEBUG MODIFIER, AND IT OUTRANKS THE DIALOGS. While
+  -- SELECT is HELD, fall through to the instrument block below rather
+  -- than letting a dialog eat the press: `test-queen` grants food with
+  -- SELECT+Y after raising a queen, and Gather can complete during that
+  -- run -- so with the card up the grant was silently refused, the queen
+  -- never laid, and three assertions failed in a gate that had nothing
+  -- to do with plan 06. A screen that captures input must not capture
+  -- the developer modifier.
+  if celebrate.open and not padNow.select then
+    if pressed("up") then celebrate.handle("up") end
+    if pressed("down") then celebrate.handle("down") end
+    if pressed("a") then celebrate.handle("confirm") end
+    -- B or START dismiss. START deliberately does NOT advance here even
+    -- though it does on a finished level with no dialog up: the dialog is
+    -- asking the question, so the button must not answer it silently.
+    if pressed("b") or pressed("start") then celebrate.handle("cancel") end
+    -- Same release-toggle reproduction as the level select above.
+    if padPrev.select and not padNow.select then
+      if not M.comboUsed then emit("debug", { what = "overlay" }) end
+      M.comboUsed = false
+    end
+    return
+  end
+
   local menu = require("ui.menu")
   if menu.open then
     if pressed("select") then emit("debug", { what = "overlay" }) end
@@ -271,7 +326,20 @@ local function updatePad(world, agents)
     -- HUD has been promising ("Done. Press START for the next field.")
     -- while START actually opened the pause menu. Same button, and the
     -- menu still has the row, but the prompt now does what it says.
-    if M.levelDone then
+    --
+    -- ...BUT ONLY ONCE, AND ONLY WHILE THE HUD IS STILL SAYING IT (plan
+    -- 06). Before this, `levelDone` made START mean "next field" FOREVER,
+    -- so once a level was finished the pause menu became permanently
+    -- unreachable: no volume, no palette, no hints, no level select, on
+    -- the one screen where a player is most likely to want them. Found
+    -- while building test-progress, which could not open the menu after
+    -- recording a win no matter what it pressed.
+    --
+    -- `startConsumed` is cleared whenever a new level starts (M.reset),
+    -- so the promise is kept exactly once per completion and START goes
+    -- back to being the pause button afterwards.
+    if M.levelDone and not M.startConsumed then
+      M.startConsumed = true
       menu.wantNextLevel = true
       return
     end
@@ -509,6 +577,17 @@ local function updatePad(world, agents)
     -- tick, and the assertion needs a specific one, a holder, to die on
     -- command while the fight is otherwise running normally.
     if pressed("l") then emit("debug", { what = "killholder" }); M.comboUsed = true end
+    -- SELECT+R: drop an enemy queen's corpse on a mound the player
+    -- already holds. Plan 06's test-queencarry post-capture control only
+    -- -- see probe.command's "dropqueen" note for why a real siege
+    -- cannot be relied on to produce that ordering.
+    if pressed("r") then emit("debug", { what = "dropqueen" }); M.comboUsed = true end
+    -- SELECT+START / SELECT+X are plan 06's progress instruments
+    -- (test-progress only): mark the current level beaten, and wipe the
+    -- beaten set. See probe.command's notes for why the select screen's
+    -- rules are proved from a written set rather than by winning four
+    -- levels inside one gate.
+    if pressed("start") then emit("debug", { what = "beatlevel" }); M.comboUsed = true end
     -- Everything else is swallowed while the modifier is held, so a
     -- combo never also fires the unmodified action underneath it.
     return
@@ -711,7 +790,19 @@ local function updatePointer(world, agents)
         p.panning = false
         p.miniDrag = false
         local menu = require("ui.menu")
-        if menu.open then
+        -- PLAN 06: the two full-screen dialogs claim the click first and
+        -- consume it, in the same order the pad block above uses. Without
+        -- this a click meant for a level row would fall through to
+        -- pickNode and start selecting mounds through the menu.
+        local levelsel = require("ui.levelselect")
+        local celebrate = require("ui.celebrate")
+        if levelsel.open then
+          levelsel.click(M.vp, p.x, p.y)
+          p.startNode = nil
+        elseif celebrate.open then
+          celebrate.click(M.vp, p.x, p.y)
+          p.startNode = nil
+        elseif menu.open then
           local row = menu.hitRow(M.vp, p.x, p.y)
           if row then menu.index = row; menu.handle("confirm")
           else menu.open = false end
@@ -1052,6 +1143,10 @@ end
 function M.reset()
   M.selected, M.cursor.node = nil, nil
   M.fraction, fracIndex = 1.0, 3
+  -- A NEW LEVEL RE-ARMS THE ONE-SHOT "START = next field" promise (plan
+  -- 06). main.lua calls this from startLevel, so the next completion gets
+  -- its own single START, and in between START is the pause button.
+  M.startConsumed = false
 end
 
 return M

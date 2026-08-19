@@ -35,7 +35,22 @@ function M.serialize(s)
   local function put(...) out[#out + 1] = table.concat({ ... }, " ") end
   put("v", M.VERSION)
   put("seed", s.seed)
-  put("level", s.nextLevelId or s.levelId or "-")
+  -- THE LEVEL THIS BLOB DESCRIBES, not the one after it (plan 06).
+  --
+  -- This used to write `s.nextLevelId or s.levelId`, so the instant a
+  -- level completed the autosave started naming the NEXT level while
+  -- every L/n line below still described the OLD board. On restart,
+  -- main.lua built the next level's world from that name and then
+  -- deserialize() overlaid the finished level's mounds onto it BY INDEX
+  -- -- a different board's ownership, garrisons and queens written into
+  -- whatever node happened to sit at the same position in the list. The
+  -- seed check cannot catch it (same save, same seed).
+  --
+  -- Advancing a level was the only thing that trick bought, and
+  -- sim/progress.lua owns that now: the beaten set says where the player
+  -- has got to, and this line says only what it can honestly say --
+  -- which board the numbers underneath belong to.
+  put("level", s.levelId or "-")
   put("t", n2(s.time))
   put("rng", s._rngState())
 
@@ -235,7 +250,14 @@ end
 
 function M.write(s)
   local text = M.serialize(s)
-  local ok, err = pcall(love.filesystem.write, M.FILE, text)
+  -- CARRY THE PROGRESS LINES THROUGH (plan 06). There is ONE save blob,
+  -- not a filesystem (see sim/progress.lua's header), so writing the
+  -- colony without re-emitting the `p` lines would silently erase which
+  -- levels the player has beaten on the very next autosave -- 30 seconds
+  -- into any session.
+  local progress = require("sim.progress")
+  text = progress.serialize() .. "\n" .. text
+  local ok, err = pcall(love.filesystem.write, nil, text)
   if not ok then
     print("@save FAILED " .. tostring(err))
     return false

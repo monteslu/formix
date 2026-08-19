@@ -19,8 +19,19 @@ R.check('Gather completed (queen raised)', mound.n1.queens === 1);
 const done = d.all().filter(x=>x.startsWith('@level'));
 R.check('level reports complete', done.length > 0, done.join(' ') || 'no @level line');
 
-// START advances to the next field.
-await d.press('start');
+// START advances to the next field -- but plan 06 put a celebration
+// dialog in front of it, and that dialog deliberately treats START as
+// DISMISS rather than as "yes, next level": it is asking the question, so
+// the button must not answer it silently. A winning player now presses
+// START twice (or picks "Next level" on the card, by pad or mouse --
+// test-celebrate covers both of those paths).
+//
+// Both presses are needed here, and the second one is the one this gate
+// has always been about: it proves the world is really REBUILT, which is
+// what silently did not happen before menu.wantNextLevel had a consumer.
+await d.press('start');          // dismiss the celebration card
+await d.step(30);
+await d.press('start');          // and now advance, as before
 await d.step(240);
 const after = await d.inspect();
 const ids = Object.keys(after.mound);

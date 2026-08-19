@@ -165,6 +165,10 @@ function M.report()
   end
   parts[#parts + 1] = "war=" .. ((tenseFor or 0) > 0 and "1" or "0")
   parts[#parts + 1] = "shots=" .. tostring(M._shotCount or 0)
+  if M._lastShot then
+    parts[#parts + 1] = string.format("last=%s@%.2f", M._lastShot,
+                                      M._lastShotGain or 0)
+  end
   print("@audio " .. table.concat(parts, " "))
 end
 
@@ -220,6 +224,13 @@ function M.play(name, volume)
   if time - (lastPlayed[name] or -99) < gap then return false end
   lastPlayed[name] = time
   M._shotCount = (M._shotCount or 0) + 1
+  -- THE LAST ONE-SHOT AND ITS GAIN, for a gate to read (plan 06). The
+  -- clank volume is a tuning number settled by ear, so nothing asserts a
+  -- threshold on it -- but "the clanks are louder now" should at least be
+  -- CHECKABLE rather than taken on trust, and there was no way to see the
+  -- value at all before this.
+  M._lastShot = name
+  M._lastShotGain = volume or 0.8
   -- setVolume BEFORE play: play() hands the current vol to the host when it
   -- allocates the channel (see ensurePlaying for the longer version of this
   -- trap). Stop first so a retrigger restarts from the head instead of
@@ -265,9 +276,24 @@ function M.update(snap, dt)
   elseif hits > lastHits then
     local d = hits - lastHits
     lastHits = hits
-    -- Louder for a bigger exchange, but never a notification: this tops out
-    -- well under the one-shots that mean the player did something.
-    M.play("clank", math.min(0.55, 0.22 + d * 0.05))
+    -- LOUDER FOR A BIGGER EXCHANGE (plan 06: Luis asked for the clanks to
+    -- be louder during battles).
+    --
+    -- The old curve topped out at 0.55 and started at 0.22, under a
+    -- master of volumeScalar * 0.85 -- so at the default volume setting a
+    -- landed blow played at roughly a fifth of full scale. Plan 05 made a
+    -- landed blow the whole point of zooming into a fight (3s swings, a
+    -- 90-degree cone, one clang per hit); a sound that quiet undersells
+    -- the event it exists to mark.
+    --
+    -- A single blow now lands about twice as loud, and a flurry
+    -- approaches full scale. Still a rate-following volume rather than a
+    -- notification: the 30ms polyphony guard above is untouched, so a
+    -- pathological ant count degrades gracefully instead of becoming
+    -- white noise. These numbers are first-pass tuning settled by ear in
+    -- the manual pass -- test-battle asserts on hit COUNTS
+    -- (`snap.hits` deltas), never on gain, so nothing here moves a gate.
+    M.play("clank", math.min(0.95, 0.45 + d * 0.08))
   end
 
   -- ── MUSIC: are we at war? ──

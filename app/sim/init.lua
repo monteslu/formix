@@ -817,6 +817,15 @@ function M.update(s, dt)
       s.levelDone = true
       local nxt = campaign.next(s.levelId)
       s.nextLevelId = nxt and nxt.id or nil
+      -- PLAN 06: record it on the rising edge, in its own file. This is
+      -- the ONLY thing that has to survive for the level select to work,
+      -- and it is written the moment it becomes true rather than at the
+      -- next autosave -- a player who wins and immediately closes the
+      -- game has still beaten the level.
+      require("sim.progress").markBeaten(s.levelId)
+      -- The celebration reads this edge (ui/celebrate.lua): it must fire
+      -- once, on the transition, not every frame the level stays done.
+      s.levelJustDone = true
       print("@level complete " .. tostring(s.levelId) ..
             " next=" .. tostring(s.nextLevelId))
     end

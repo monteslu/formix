@@ -40,7 +40,14 @@ end
 --
 -- Keep this list in step with the sizes the UI asks for; a missed one is
 -- not a crash, just the same first-use hazard again.
-local SIZES = { 17, 21, 22, 23, 24, 26, 30, 32, 34, 40, 46 }
+-- Kept in step with:
+--     grep -rno 'fonts\.get(vp, [0-9]*)' app/ | grep -o '[0-9]*)' | tr -d ')' | sort -nu
+-- Re-run that when adding a screen OR resizing type. This list has gone
+-- stale twice: 52/58 arrived with plan 06's level select and completion
+-- card and were missed, and the whole list went stale again when the type
+-- scale came down (every size in the UI was oversized for a 1080p screen
+-- -- the celebration title alone was 5.4% of screen height).
+local SIZES = { 15, 19, 20, 22, 24, 26, 30, 34, 38 }
 function M.warm(vp)
   for i = 1, #SIZES do M.get(vp, SIZES[i]) end
 end

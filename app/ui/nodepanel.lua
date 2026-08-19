@@ -22,7 +22,11 @@ local M = {}
 -- taller box behind a mound's still told the player which they had
 -- clicked, from the silhouette, without a word of text. A gate that only
 -- compared the wording passed while the panel leaked by shape.
-M.UNKNOWN_H = 214
+-- SIZED FOR THE TALLEST STATE EITHER PANEL REACHES IN THIS BOX: title +
+-- THREE body rows (a guarded location prints "guarded / N to beat" and
+-- "one ant per hit" under its blurb) + padding. 14 + (24+4) + 3*(20+9)
+-- + 14 = 143. Sizing it for the two-row case instead clipped the third.
+M.UNKNOWN_H = 143
 
 M.COL = {
   you  = { 0.55, 0.95, 0.62 },
@@ -59,7 +63,14 @@ local LOC_BLURB = {
 
 function M.drawLoc(vp, snap, intents, l)
   local g = love.graphics
-  local w, h = vp.u(430), vp.u(214)
+  -- THE SAME BOX AN UNVISITED MOUND GETS, from the same constant. These
+  -- were two literals that happened to be equal, and the type-scale pass
+  -- proved why that is not good enough: picking a new height for each
+  -- one separately (150 here, 116 there) made an unexplored mound and an
+  -- unexplored patch different SHAPES, which is the exact leak the
+  -- M.UNKNOWN_H note describes and which test-fog3 caught immediately.
+  -- One constant, referenced twice, cannot drift.
+  local w, h = vp.u(370), vp.u(M.UNKNOWN_H)
   local x, y = vp.u(28), vp.h - h - vp.u(28)
   -- IDENTITY IS WHAT VISITING BUYS. `observed` is presence -- true only
   -- while your ants are actually standing here -- so keying the panel on
@@ -85,8 +96,8 @@ function M.drawLoc(vp, snap, intents, l)
   g.line(x + w, y + h, x, y + h); g.line(x, y + h, x, y)
   g.setLineWidth(1)
 
-  local fTitle = fonts.get(vp, 30)
-  local fBody = fonts.get(vp, 24)
+  local fTitle = fonts.get(vp, 24)
+  local fBody = fonts.get(vp, 20)
   local pad = vp.u(20)
   local ty = y + vp.u(14)
 
@@ -106,7 +117,7 @@ function M.drawLoc(vp, snap, intents, l)
     g.print(label, x + pad, ty)
     g.setColor(col[1], col[2], col[3], 1)
     g.print(value, x + w - pad - fBody:getWidth(value), ty)
-    ty = ty + fBody:getHeight() + vp.u(3)
+    ty = ty + fBody:getHeight() + vp.u(9)
   end
 
   if not known then
@@ -179,7 +190,7 @@ function M.draw(vp, snap, intents)
   -- where this first went) leaves the box the right size at the wrong
   -- place, floating off the bottom edge.
   local unknownBox = not n.visited
-  local w, h = vp.u(430), vp.u(unknownBox and M.UNKNOWN_H or 260)
+  local w, h = vp.u(370), vp.u(unknownBox and M.UNKNOWN_H or 248)
   local x, y = vp.u(28), vp.h - h - vp.u(28)
 
   -- WHAT YOU KNOW ABOUT A MOUND YOU HAVE NEVER STOOD ON: that it is
@@ -218,8 +229,8 @@ function M.draw(vp, snap, intents)
   g.line(x + w, y + h, x, y + h); g.line(x, y + h, x, y)
   g.setLineWidth(1)
 
-  local fTitle = fonts.get(vp, 30)
-  local fBody = fonts.get(vp, 24)
+  local fTitle = fonts.get(vp, 24)
+  local fBody = fonts.get(vp, 20)
   local pad = vp.u(20)
   local ty = y + vp.u(14)
 
@@ -235,6 +246,14 @@ function M.draw(vp, snap, intents)
           x + pad, ty)
   ty = ty + fTitle:getHeight() + vp.u(4)
 
+  -- ROW PITCH CLEARS THE INK, NOT THE EM BOX (plan 06). getHeight() on
+  -- this face returns the REQUESTED size (24.00, measured live), but the
+  -- Atkinson Bold glyph box actually inks ~32px at that size -- caps plus
+  -- descenders. `getHeight() + 3` therefore advanced 27px for 32px of
+  -- ink, and consecutive rows touched: measured on a capture of the live
+  -- panel, "your ants here" and "queens" merged into ONE continuous
+  -- 58px-tall band of ink instead of two 21px rows. +11 clears the
+  -- descender with a readable gap.
   g.setFont(fBody)
   local function line(label, value, col)
     col = col or { 0.88, 0.88, 0.82 }
@@ -242,7 +261,7 @@ function M.draw(vp, snap, intents)
     g.print(label, x + pad, ty)
     g.setColor(col[1], col[2], col[3], 1)
     g.print(value, x + w - pad - fBody:getWidth(value), ty)
-    ty = ty + fBody:getHeight() + vp.u(3)
+    ty = ty + fBody:getHeight() + vp.u(9)
   end
 
   local mine = A.garrison(snap.agents, n.id, "you")
@@ -319,12 +338,24 @@ function M.draw(vp, snap, intents)
     -- aim at a button they can trigger with a press.
     -- Wide enough for the longest label plus its cost line at font 17; a
     -- button that clips its own caption is worse than no icon.
-    local BTN = vp.u(96)
+    -- WIDTH COMES FROM THE WIDEST CAPTION, not a constant. A hardcoded
+    -- 84 was narrower than the word it had to hold: "queen" at font 15
+    -- measures 88px, so the centring term `(BTN - textWidth) * 0.5` went
+    -- NEGATIVE and printed the caption starting outside the plate's left
+    -- edge, spilling over the panel border. Measuring the labels means
+    -- the plate can never be too small for its own text again, at any
+    -- font size -- which is exactly the failure the whole type-scale pass
+    -- produced when 96 came down to 84.
+    local fSmall = fonts.get(vp, 15)
+    local BTN = 0
+    for _, cap in ipairs({ "queen", "brood", "cost " .. qCost, "cost " .. uCost }) do
+      BTN = math.max(BTN, fSmall:getWidth(cap))
+    end
+    BTN = BTN + vp.u(16)          -- padding either side of the caption
     -- HEIGHT IS MEASURED FROM THE CONTENTS, not guessed. Three nudges at
     -- this constant each left the cost line a few pixels outside the
     -- plate: an icon block plus two text rows plus padding is a sum, so
     -- add it up rather than eyeballing it.
-    local fSmall = fonts.get(vp, 17)
     local lh = fSmall:getHeight()
     -- TALLER, on request ("queen and brood label and cost look a little
     -- crowded"). ICONH grew from 0.52 to 0.62 of the button width, which
@@ -332,15 +363,22 @@ function M.draw(vp, snap, intents)
     -- air below it -- the queen icon's abdomen+egg reach 0.82 * icon-size
     -- below its own centre, so the old 0.52 left barely a name's cap-
     -- height of clearance before "queen" printed.
-    local ICONH = BTN * 0.62
+    -- ICON HEIGHT IS ITS OWN NUMBER, not a fraction of the plate's WIDTH.
+    -- It used to be `BTN * 0.62`, which was fine while BTN was a constant
+    -- -- but BTN is now measured from the widest caption, so a longer
+    -- word would silently make the icon (and the whole plate, and the
+    -- panel that has to contain it) taller. Width answers "does the text
+    -- fit"; height answers "how big is the icon". They are not the same
+    -- question and must not be the same number.
+    local ICONH = vp.u(52)
     -- GAP is real breathing room between the name and its cost line,
     -- not just whatever the font's own line-height happens to leave.
     -- Widened from a first pass at 6px, which was not enough to read as
     -- SPACING rather than as a slightly-generous line height -- 6px is
     -- under a third of lh, so the two lines still read as one crowded
     -- block. 12px is closer to a whole blank line between them.
-    local GAP = vp.u(12)
-    local BTNH = ICONH + lh * 2 + GAP + vp.u(26)
+    local GAP = vp.u(10)
+    local BTNH = ICONH + lh * 2 + GAP + vp.u(20)
     local bx0 = x + pad
     local by0 = ty + vp.u(4)
     local slot = 0
@@ -421,7 +459,7 @@ function M.draw(vp, snap, intents)
     if full then
       g.setColor(0.42, 0.44, 0.40, 0.85)
       g.print("queen chamber full", x + pad, ty)
-      ty = ty + fBody:getHeight() + vp.u(3)
+      ty = ty + fBody:getHeight() + vp.u(9)
     else
       action(queenIcon, "queen", "Y", mine >= qCost, "queen")
     end

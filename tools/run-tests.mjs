@@ -19,13 +19,24 @@ if (existsSync('app/startlevel')) {
 const suites = ['test-reachable', 'test-overlap', 'test-queen', 'test-grey', 'test-gameplay',
                 'test-longrun', 'test-deadend', 'test-strand',
                 'test-campaign', 'test-render', 'test-camera',
+                // PLAN 06's two UI gates. Neither packs its own board --
+                // both drive the ordinary cart through the pause menu and
+                // the overlay-gated progress instruments -- so they sit
+                // with the cheap gates rather than in the rebuild
+                // quarantine below.
+                'test-progress', 'test-celebrate',
                 // THE CART-REBUILDING GATES GO LAST, all of them. test-war
                 // was the first, for the reason below; test-food and
                 // test-bootstrap pack their own boards the same way and
                 // belong in the same quarantine. Running them before
                 // test-render is exactly the mistake the note describes.
                 'test-war', 'test-food', 'test-forage', 'test-locrules',
-                'test-bootstrap', 'test-fog3'];
+                'test-bootstrap', 'test-fog3',
+                // test-siege was written during plan 05 and never added to
+                // this list -- it packs `gatesiege`, so it belongs in the
+                // quarantine, and it has been running only by hand since.
+                // test-queencarry (plan 06) packs `gatesiege2` next to it.
+                'test-siege', 'test-queencarry'];
 // LAST, ON PURPOSE: test-war rebuilds the cart twice (it needs its own
 // level) and the pixel gate that followed it came back with a completely
 // black frame on two separate runs, then passed 4/4 in isolation. Putting

@@ -61,7 +61,7 @@ local function bounds(world)
 end
 
 -- BOTTOM-RIGHT, matching the mound/location panel's footprint in the
--- opposite corner (430x260 -- see ui/nodepanel.lua) rather than the old
+-- opposite corner (370x248 -- see ui/nodepanel.lua) rather than the old
 -- fixed 250x250 square. Same size, same margin, mirrored: the two panels
 -- read as a matched pair instead of one being an afterthought stuck under
 -- wherever the pause button happened to be.
@@ -72,7 +72,7 @@ end
 -- ui/menu.lua). Nothing about the minimap needs to live near the pause
 -- button at all.
 function M.rect(vp)
-  local w, h = vp.u(430), vp.u(260)
+  local w, h = vp.u(370), vp.u(248)
   local x, y = vp.w - w - vp.u(28), vp.h - h - vp.u(28)
   return x, y, w, h
 end

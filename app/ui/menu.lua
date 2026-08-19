@@ -28,7 +28,14 @@ M.settings = {
 -- player "the next garden opens when you return" and then giving them no
 -- way to go there is the worst of both: they have succeeded and the game
 -- has stranded them.
+-- CHOOSE A LEVEL is reachable from the pause menu (plan 06), not only at
+-- boot. Two reasons it belongs here rather than being boot-only: romdev's
+-- wasmcart host does not persist the save region across a cart load, so
+-- boot-only would make the screen unreachable in any gate AND in any
+-- playtest that starts fresh; and a player who wants to replay Gather
+-- should not have to close the game to do it.
 local ROWS_BASE = {
+  { key = "levels", label = "Choose a level" },
   { key = "volume", label = "Sound" },
   { key = "palette", label = "Colours" },
   { key = "hints", label = "Hints" },
@@ -100,6 +107,14 @@ function M.handle(kind, arg)
   elseif kind == "confirm" then
     local row = ROWS[M.index]
     if row.key == "resume" then M.open = false
+    elseif row.key == "levels" then
+      -- Hand off to the level select, which owns its own rows and both
+      -- devices' handling. Rebuilt on the way in so a level beaten this
+      -- session shows as beaten without a restart.
+      local levelsel = require("ui.levelselect")
+      levelsel.build()
+      levelsel.open = true
+      M.open = false
     elseif row.key == "next" then
       -- The cart cannot rebuild its world mid-frame safely (ants are
       -- walking edges that would vanish), so this asks main.lua to do it
@@ -232,8 +247,8 @@ function M.draw(vp)
   g.setColor(0.02, 0.03, 0.04, 0.88)
   g.rectangle("fill", 0, 0, vp.w, vp.h)
 
-  local fTitle = fonts.get(vp, 40)
-  local fRow = fonts.get(vp, 34)
+  local fTitle = fonts.get(vp, 30)
+  local fRow = fonts.get(vp, 26)
   local w = vp.u(700)
   local rowH = vp.u(86)
   local x = (vp.w - w) * 0.5

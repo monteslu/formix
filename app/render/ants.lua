@@ -185,16 +185,43 @@ end
 -- THE QUEEN. Twice a worker's size, with a crown and wings -- she is the
 -- production unit, so she has to be unmistakable at a glance. Drawn from
 -- the same three-segment body, then given the two things that say queen.
-local function queenBody(x, y, dir, size, col, gait)
+--
+-- `dead` (plan 06) draws the SAME queen as a corpse, and it is a flag on
+-- this one function rather than a second construction on purpose. The
+-- previous build hand-rolled a carried corpse out of three bare quads in
+-- render/ants.lua's carry block, and it rendered as exactly what Luis
+-- reported: "a box or some shit" -- a detached brown rectangle floating
+-- beside the carrier, nothing like the queen the player had just watched
+-- die. A dead queen must be the same shape as a live one because she IS
+-- the same queen; the only honest way to guarantee that is for both to
+-- come out of one constructor. Anything drawn here is drawn for both
+-- callers, so the two can never drift again.
+--
+-- What `dead` changes, and nothing else: wings fall still (no flutter),
+-- legs go limp (gait frozen), the crown is dropped -- a dead queen is
+-- not wearing it -- and her round pupils become crossed X strokes, the
+-- unmistakable "she is not alive" tell Luis asked for ("X's instead of
+-- her round eyes after she's dead").
+local function queenBody(x, y, dir, size, col, gait, dead)
   local g = love.graphics
   local c, sn = math.cos(dir), math.sin(dir)
+  -- A corpse does not animate. Freezing the gait rather than branching
+  -- the geometry keeps the limbs and wings in their neutral pose, which
+  -- is what "limp" looks like on a body built out of swing offsets.
+  if dead then gait = 0 end
 
   -- WINGS FIRST, so the body overlaps their roots. Long translucent
   -- ovals swept back off the thorax, with a slow idle flutter -- a queen
   -- who never moves reads as a decal.
-  local flutter = math.sin(gait * 0.6) * 0.10
+  local flutter = dead and 0 or math.sin(gait * 0.6) * 0.10
   for side = -1, 1, 2 do
-    g.setColor(0.86, 0.90, 0.95, 0.34)
+    -- Duller and more transparent once she is dead: wings that still
+    -- catch the light read as alive even when nothing is moving.
+    if dead then
+      g.setColor(0.74, 0.76, 0.78, 0.22)
+    else
+      g.setColor(0.86, 0.90, 0.95, 0.34)
+    end
     local n = 0
     local wingScratch = {}
     for i = 1, 12 do
@@ -213,6 +240,29 @@ local function queenBody(x, y, dir, size, col, gait)
   end
 
   body(x, y, dir, size, col, gait, 2)
+
+  if dead then
+    -- DEAD EYES: an X of two crossed strokes where `body()` just drew her
+    -- round pupils, at the same body-space offsets it uses (2.00, +/-0.30)
+    -- so they land ON the eyes rather than near them.
+    g.setColor(0.05, 0.04, 0.04, 0.95)
+    g.setLineWidth(math.max(1, size * 0.10))
+    local w = 0.22
+    for i = -1, 1, 2 do
+      local ex, ey = 2.00, i * 0.30
+      local function px(bx, by)
+        return x + (c * bx - sn * by) * size, y + (sn * bx + c * by) * size
+      end
+      local ax, ay = px(ex - w, ey - w)
+      local bx2, by2 = px(ex + w, ey + w)
+      local cx2, cy2 = px(ex - w, ey + w)
+      local dx2, dy2 = px(ex + w, ey - w)
+      g.line(ax, ay, bx2, by2)
+      g.line(cx2, cy2, dx2, dy2)
+    end
+    g.setLineWidth(1)
+    return
+  end
 
   -- THE CROWN: three points sitting on the head, in gold so it is the
   -- brightest thing on her.
@@ -594,46 +644,37 @@ function M.draw(snap, vp)
         if ant.carryQueen then
           -- A FALLEN QUEEN, carried home (Luis, 2026-08-19: "carry
           -- queen's body back to hive" / "X's instead of her round eyes
-          -- after she's dead"). She is the biggest single piece of food
-          -- on the board (05-battles.md's own words), so her body reads
-          -- as bigger than any item -- a limp three-segment shape (the
-          -- same construction `body()` draws a live ant or queen with,
-          -- gaster/thorax/head, but static: no legs, no gait, no wing
-          -- flutter) trailing behind the ant's jaws rather than held
-          -- proudly up front, and DEAD EYES: an X of two crossed strokes
-          -- where a live queen's round dot pupils go, the unmistakable
-          -- "she is not alive" tell.
-          local qsz = isz * 1.35
-          local qx = sx - ca * antSize * 0.9
-          local qy = sy - sa * antSize * 0.9
-          local qc, qs = ca, sa
-          local function qseg(off, w, l)
-            local cx2, cy2 = qx + qc * off * qsz, qy + qs * off * qsz
-            local px, py = -qs * w * qsz, qc * w * qsz
-            local fx, fy = qc * l * qsz, qs * l * qsz
-            love.graphics.polygon("fill",
-              cx2 - fx + px, cy2 - fy + py, cx2 + fx + px, cy2 + fy + py,
-              cx2 + fx - px, cy2 + fy - py, cx2 - fx - px, cy2 - fy - py)
-          end
-          love.graphics.setColor(0.42, 0.34, 0.16, 1)
-          qseg(-1.5, 0.62, 0.58)   -- gaster
-          love.graphics.setColor(0.52, 0.42, 0.20, 1)
-          qseg(0.1, 0.42, 0.30)    -- thorax
-          love.graphics.setColor(0.58, 0.48, 0.24, 1)
-          qseg(0.75, 0.34, 0.26)   -- head
-          -- The X eyes, at roughly the head's own eye spots.
-          local hx2 = qx + qc * 0.95 * qsz
-          local hy2 = qy + qs * 0.95 * qsz
-          local ew = qsz * 0.11
-          for side = -1, 1, 2 do
-            local ex = hx2 - qs * side * qsz * 0.18
-            local ey = hy2 + qc * side * qsz * 0.18
-            love.graphics.setColor(0.05, 0.04, 0.04, 0.95)
-            love.graphics.setLineWidth(math.max(1, qsz * 0.05))
-            love.graphics.line(ex - ew, ey - ew, ex + ew, ey + ew)
-            love.graphics.line(ex - ew, ey + ew, ex + ew, ey - ew)
-          end
-          love.graphics.setLineWidth(1)
+          -- after she's dead"; and 2026-08-19 again, after seeing what
+          -- shipped: "it's turning them into a box or some shit instead
+          -- of just carrying the same queen rendering back").
+          --
+          -- SHE IS DRAWN BY `queenBody`, THE SAME FUNCTION THAT DRAWS HER
+          -- ALIVE. The previous build hand-rolled three bare quads here,
+          -- which is what produced the box: quads have no waist, no legs,
+          -- no wings and no crown, so a carried queen shared nothing with
+          -- the queen the player had just watched die except her colour.
+          -- Routing both through one constructor (with `dead` freezing
+          -- the gait, stilling the wings, dropping the crown and crossing
+          -- her eyes) is what makes "the same queen rendering" true by
+          -- construction rather than by careful copying.
+          --
+          -- Behind the jaws, not held up over the head like a crumb: she
+          -- is the biggest thing on the board an ant can carry, and a
+          -- body is dragged rather than presented. Sized off `antSize`
+          -- (the carrier's own scale) rather than `isz`, because she is a
+          -- QUEEN -- twice a worker -- not an item.
+          local qsz = antSize * 1.05
+          local qx = sx - ca * (antSize * 1.25 + qsz * 0.6)
+          local qy = sy - sa * (antSize * 1.25 + qsz * 0.6)
+          -- Her own side's colour, dimmed: she is meat now, not a
+          -- combatant, and at full saturation she reads as a live second
+          -- ant walking backwards behind the carrier.
+          local qcol = SIDE_COL[ant.carryQueenSide]
+                    or ((ant.carryQueenSide == "you") and YOUR_COL)
+                    or ENEMY_COL
+          queenBody(qx, qy, ant.dir, qsz,
+                    { qcol[1] * 0.62, qcol[2] * 0.62, qcol[3] * 0.62 },
+                    0, true)
         elseif ant.carry >= 4 then
           -- APHID: two overlapping convex ovals plus the wet highlight,
           -- exactly as the patch draws it. Never one waisted outline -- a

@@ -199,6 +199,25 @@ function M.reportUI(vp)
   print(string.format("@ui menu=%s row=%d cursor=%s selected=%s frac=%.2f",
     tostring(menu.open), menu.index, tostring(intents.cursor.node),
     tostring(intents.selected), intents.fraction or 0))
+  -- PLAN 06's two screens, and the row list the select is showing. A
+  -- pixel assertion can prove SOMETHING is drawn but not which levels are
+  -- beaten, which is the frontier and which are locked -- that is state,
+  -- and this is the only place it is visible to a gate.
+  do
+    local levelsel = require("ui.levelselect")
+    local celebrate = require("ui.celebrate")
+    local parts = {}
+    for i, row in ipairs(levelsel.rows()) do
+      parts[#parts + 1] = string.format("%s:%s%s%s", tostring(row.levelId),
+        row.key == "continue" and "C" or "-",
+        row.beaten and "B" or "-",
+        row.locked and "L" or "-")
+    end
+    print(string.format("@ui2 select=%s selrow=%d celebrate=%s celrow=%d rows=%s",
+      tostring(levelsel.open), levelsel.index,
+      tostring(celebrate.open), celebrate.index,
+      #parts > 0 and table.concat(parts, " ") or "none"))
+  end
   -- THE CAMERA, which no pixel assertion can pin down: a view that panned
   -- and a view that did not look identical in a screenshot of open ground.
   if vp then
@@ -211,7 +230,13 @@ function M.command(S, what)
   local sim = require("sim.init")
   if what == "overlay" then
     M.overlay = not M.overlay
-    M.wantReport = M.overlay
+    -- ARM A DUMP WHENEVER THE OVERLAY GOES UP. Previously this also
+    -- cleared the flag on the way DOWN (`= M.overlay`), which is
+    -- harmless, but the flag is a one-shot consumed by the next draw --
+    -- so a gate that toggles on, steps, and only then reads can find the
+    -- report already spent. Re-arming on every activation is what makes
+    -- "toggle on, look" reliable regardless of what else is on screen.
+    if M.overlay then M.wantReport = true; M.reportFrames = 3 end
     print("@dbg overlay=" .. tostring(M.overlay))
   elseif what == "pause" then
     S.paused = not S.paused
@@ -369,6 +394,110 @@ function M.command(S, what)
       end
     end
     print("@dbg killholder found nothing to kill")
+  elseif what == "dropqueen" then
+    -- PLAN 06, test-queencarry's post-capture CONTROL only: drop an enemy
+    -- queen's corpse onto a mound the PLAYER ALREADY HOLDS.
+    --
+    -- Why a debug op rather than a staged fight: this is the state the
+    -- pickup guard actually governs, and an ordinary siege cannot be
+    -- relied on to produce it. Measured in plan 06's phase 0, on every
+    -- board tried, the queen's death and the pickup land in the SAME tick
+    -- -- before the mound's energy grind flips ownership -- so the
+    -- capture-first ordering the old `n.owner ~= ant.side` guard breaks
+    -- on is real but not reachable by simply playing the fixture. It
+    -- becomes reachable the moment a storming party dies before lifting
+    -- her, or a rival takes the ground back, and then the body is stuck
+    -- forever with no way for anyone to collect it.
+    --
+    -- So the op fabricates exactly one thing -- a corpse on owned ground,
+    -- which the sim itself produces -- and changes nothing else. The
+    -- assertion that follows is still testing the real pickup code in
+    -- M.update, not a fabricated pickup.
+    if not M.overlay then
+      print("@dbg refused dropqueen (overlay off)")
+      return
+    end
+    local A2 = A
+    local placed = false
+    for i = 1, #S.world.nodes do
+      local n = S.world.nodes[i]
+      if n.owner == A2.YOU then
+        n.corpses = (n.corpses or 0) + 1
+        n.corpseValue = A2.cfg.queenFood
+        -- Hers, not yours: a corpse the player's own side may collect.
+        n.corpseSide = "red"
+        print(string.format(
+          "@dbg dropqueen at=%s owner=%s corpses=%d value=%d side=%s",
+          tostring(n.id), tostring(n.owner), n.corpses, n.corpseValue,
+          tostring(n.corpseSide)))
+        placed = true
+        break
+      end
+    end
+    if not placed then print("@dbg dropqueen found no owned mound") end
+  elseif what == "beatlevel" then
+    -- PLAN 06, test-progress ONLY: mark the CURRENT level beaten and
+    -- report the resulting set, without playing it to completion.
+    --
+    -- The level-select rules (which rows are beaten, which one is the
+    -- frontier, which are locked) are a function of the beaten SET, and
+    -- proving them by actually winning four levels would make one gate
+    -- take longer than the whole suite -- and would assert on the
+    -- campaign's difficulty tuning rather than on the select logic.
+    -- `campaign.complete` is exercised for real by test-campaign; this
+    -- writes the same record that a real win writes, through the same
+    -- function (progress.markBeaten), and nothing else.
+    if not M.overlay then
+      print("@dbg refused beatlevel (overlay off)")
+      return
+    end
+    local prog = require("sim.progress")
+    prog.markBeaten(S.levelId)
+    -- AND FIRE THE COMPLETION TRANSITION, so this one instrument covers
+    -- both halves of plan 06's progress work: the record, and the
+    -- celebration that hangs off `levelJustDone`. They are kept together
+    -- because there is no free button combination left for a second one
+    -- (SELECT is the modifier and every face button, shoulder and d-pad
+    -- direction under it is already spoken for) -- and because a real win
+    -- always does both, so splitting them would let a gate exercise a
+    -- state the game itself can never be in.
+    if not S.levelDone then
+      local campaign = require("sim.campaign")
+      S.levelDone = true
+      local nxt = campaign.next(S.levelId)
+      S.nextLevelId = nxt and nxt.id or nil
+      S.levelJustDone = true
+    end
+    local ids = {}
+    for id in pairs(prog.beaten) do ids[#ids + 1] = id end
+    table.sort(ids)
+    -- RE-READ FROM THE BLOB IN THE SAME BREATH. The gate cannot prove
+    -- persistence by reloading the cart -- romdev's wasmcart host parses
+    -- the save region but never writes it to disk, so a loadMedia starts
+    -- every cart with an empty one (verified while building plan 06;
+    -- the colony save has the same limitation, which is why no gate has
+    -- ever asserted a reload either).
+    --
+    -- What CAN be proved, and is what actually matters, is the round
+    -- trip through the blob itself: wipe the in-memory set, read it back
+    -- out of the written blob, and report what came back. If the write
+    -- or the co-tenancy with the colony's own lines were broken, this
+    -- returns an empty set.
+    local before = {}
+    for k in pairs(prog.beaten) do before[k] = true end
+    prog.beaten = {}
+    local blob = prog.readBlob()
+    local ok = blob and prog.deserialize(blob) or false
+    local back = {}
+    for id in pairs(prog.beaten) do back[#back + 1] = id end
+    table.sort(back)
+    -- Restore whatever was in memory, merged with what the blob had, so
+    -- the probe leaves no trace.
+    for k in pairs(before) do prog.beaten[k] = true end
+    print("@dbg beatlevel " .. tostring(S.levelId) ..
+          " beaten=" .. table.concat(ids, ",") ..
+          " fromblob=" .. (ok and table.concat(back, ",") or "REJECTED"))
+
   end
 end
 
@@ -472,12 +601,47 @@ end
 function M.draw(S, vp, intents)
   if not M.overlay then return end
   if M.wantReport then
-    M.wantReport = false
+    -- THE DUMP IS ARMED FOR A FEW FRAMES, NOT EXACTLY ONE.
+    --
+    -- This was a strict one-shot: the toggle set it, the very next draw
+    -- spent it. That is one frame of margin, and a gate that toggles the
+    -- overlay on and reads 40 frames later depends on that single frame
+    -- having actually rendered -- which it does not always, because the
+    -- first frame after an input can be spent elsewhere (a world rebuild,
+    -- a dialog opening, a heavy render). When it slipped, the dump never
+    -- printed, every parsed field came back empty, and the gate crashed
+    -- on `mound[home]` being undefined rather than on anything about the
+    -- game. `test-queen` failed exactly this way once plan 06's
+    -- completion dialog shifted the timing around it.
+    --
+    -- Three frames of arming costs three redundant dumps in the worst
+    -- case (a gate reads the last one either way) and removes the race.
+    M.reportFrames = (M.reportFrames or 3) - 1
+    if M.reportFrames <= 0 then
+      M.wantReport = false
+      M.reportFrames = nil
+    end
     M.reportNodes(S, vp)
     M.reportMounds(S)
     M.reportLocs(S)
   end
   M.reportUI(vp)
+end
+
+-- FORCE A FULL DUMP ON THE NEXT DRAW, whatever else is on screen.
+--
+-- `wantReport` is a one-shot armed by the overlay toggle, which is
+-- normally exactly right: one dump per SELECT, not one per frame. But it
+-- means the dump depends on the TOGGLE and not on the overlay being up,
+-- and a gate that toggles, waits, and then reads can find the report
+-- already spent -- which is how test-queen started crashing on an empty
+-- `mound` table once plan 06's completion dialog changed the timing
+-- around it. The state was always there; only the one-shot had gone.
+--
+-- Anything that needs the sim's state on demand (drive.mjs's inspect())
+-- calls this rather than relying on a toggle it did not make.
+function M.requestReport()
+  M.wantReport = true
 end
 
 return M

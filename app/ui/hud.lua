@@ -12,8 +12,8 @@ local fontBig, fontSmall
 
 function M.init(vp)
   local fonts = require("ui.fonts")
-  fontBig = fonts.get(vp, 46)
-  fontSmall = fonts.get(vp, 23)
+  fontBig = fonts.get(vp, 34)
+  fontSmall = fonts.get(vp, 19)
 end
 
 function M.draw(snap, vp, intents)
@@ -35,12 +35,22 @@ function M.draw(snap, vp, intents)
   if snap.level and not snap.level.generated then
     local fonts = require("ui.fonts")
     local campaign = require("sim.campaign")
-    local fT = fonts.get(vp, 26)
-    local fS = fonts.get(vp, 24)
+    local fT = fonts.get(vp, 22)
+    local fS = fonts.get(vp, 20)
     local title = snap.level.name
     local sub = snap.level.blurb
     if snap.levelDone then
-      sub = "Done. Press  START  for the next field."
+      -- PLAN 06: while the celebration card is up it is saying this, in
+      -- the middle of the screen, with two buttons. Repeating it in the
+      -- HUD strip at the same time reads as two different prompts about
+      -- the same thing. After the card is dismissed the line comes back,
+      -- because START does still advance from there.
+      local celebrate = require("ui.celebrate")
+      if celebrate.open then
+        sub = nil
+      else
+        sub = "Done. Press  START  for the next field."
+      end
     elseif snap.level.steps then
       local st = campaign.step(snap.level, snap.world, intents, snap.agents, snap.food)
       if st and snap.level.steps[st] then sub = snap.level.steps[st] end
@@ -49,9 +59,11 @@ function M.draw(snap, vp, intents)
     g.setFont(fT)
     g.setColor(0.92, 0.90, 0.84, 0.85)
     g.print(title, cx - fT:getWidth(title) * 0.5, vp.u(26))
-    g.setFont(fS)
-    g.setColor(0.74, 0.86, 0.72, snap.levelDone and 0.95 or 0.8)
-    g.print(sub, cx - fS:getWidth(sub) * 0.5, vp.u(26) + fT:getHeight() + vp.u(4))
+    if sub then
+      g.setFont(fS)
+      g.setColor(0.74, 0.86, 0.72, snap.levelDone and 0.95 or 0.8)
+      g.print(sub, cx - fS:getWidth(sub) * 0.5, vp.u(26) + fT:getHeight() + vp.u(4))
+    end
   end
 
   local x, y = vp.anchor("tl")
@@ -63,7 +75,19 @@ function M.draw(snap, vp, intents)
   g.print("ants", x + fontBig:getWidth(tostring(mine)) + vp.u(10),
           y + vp.u(20))
 
-  local ly = y + fontBig:getHeight() - vp.u(6)
+  -- ROW PITCH IS THE FONT'S OWN HEIGHT (plan 06). The rows used to
+  -- advance by `getHeight() - vp.u(6)`, which subtracted 6 units from a
+  -- 46-unit face and left the three numbers touching -- "12 ants" sat on
+  -- "4 mounds" sat on "0 food".
+  --
+  -- MEASURED on the live cart rather than guessed at: this engine's
+  -- Font:getHeight() returns exactly the requested size (46.00 for the
+  -- big face, 23.00 for the small one), so the em box IS the pitch and
+  -- the old -6 was simply eating the descenders. A first fix here used
+  -- `vp.u(46) * 1.05` and overshot -- 48.3 against the honest 46 -- which
+  -- read as a HUD suddenly too large and too loose. Use the height.
+  local rowPitch = fontBig:getHeight()
+  local ly = y + rowPitch
   g.setFont(fontBig)
   g.setColor(0.60, 0.95, 0.66, 0.95)
   g.print(tostring(owned), x, ly)
@@ -77,7 +101,7 @@ function M.draw(snap, vp, intents)
   -- stopped laying looks exactly like a queen who is between larvae --
   -- the HUD is the only place that difference is visible.
   local food = math.floor(snap.food or 0)
-  local fy = ly + fontBig:getHeight() - vp.u(6)
+  local fy = ly + rowPitch
   g.setFont(fontBig)
   if food > 0 then
     g.setColor(0.96, 0.84, 0.44, 0.95)

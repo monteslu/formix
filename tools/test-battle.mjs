@@ -57,6 +57,25 @@ async function freshDump(t, d) {
   await d.press('select', 6);   // open again -> wantReport fires, dumps
   return d.all();
 }
+
+// GET THE CELEBRATION CARD OFF THE GLASS BEFORE PHOTOGRAPHING THE GROUND.
+//
+// Plan 06 added a full-screen "Complete / Next level" dialog on level
+// completion. Winning a duel on `gatebattle` COMPLETES the gate level,
+// so by the time this gate reaches for its corpse screenshot the card is
+// painted over the middle of the screen -- and the corpse it wants sits
+// underneath it. The capture came back as flat card fill (17,21,18) and
+// the assertion read "0px", which looks exactly like "the corpse is not
+// drawn" and is really "the corpse is behind a dialog".
+//
+// B dismisses the card without advancing the level (celebrate.handle's
+// "cancel" -- START would ALSO advance, which would rebuild the board and
+// throw the corpse away). Harmless when no card is up: B on ordinary play
+// just clears the selection.
+async function dismissCard(d) {
+  await d.press('b', 6);
+  await d.step(20);
+}
 function moundFrom(lines, id) {
   const m = lines.filter(l => l.startsWith(`@mound ${id} `)).pop();
   if (!m) return null;
@@ -370,6 +389,7 @@ let corpseScreenPos = null;
 
     if (corpseScreenPos) {
       const shot1 = process.cwd() + '/test/shots/battle-corpse-present.png';
+      await dismissCard(d);
       await d.shot(shot1);
       const present = corpsePixels(shot1, ...corpseScreenPos, 15);
       R.check('corpse ink IS drawn on ground my ants hold',
@@ -430,6 +450,11 @@ if (corpseScreenPos) {
 
     if (myCorpsePos) {
       const shot2 = process.cwd() + '/test/shots/battle-corpse-absent.png';
+      // SAME DISMISSAL AS THE PRESENT CASE. This assertion expects 0px,
+      // so a card covering the ground would make it pass for entirely the
+      // wrong reason -- the pair is only meaningful if BOTH captures are
+      // taken of the same unobstructed ground.
+      await dismissCard(d);
       await d.shot(shot2);
       const absent = corpsePixels(shot2, ...myCorpsePos, 15);
       R.check('corpse ink is NOT drawn once the ground is only discovered',

@@ -19,6 +19,7 @@ local M = {}
 M.levels = {
   {
     id = "gather",
+    campaign = true,
     name = "Gather",
     -- LESSON: send ants, and ten of them make a queen.
     --
@@ -80,6 +81,7 @@ M.levels = {
   },
   {
     id = "settle",
+    campaign = true,
     name = "Settle",
     -- LESSON: a colony is FOUR working mounds, not one. You start with
     -- ten ants and one queen -- exactly the position mission 1 ends in --
@@ -125,6 +127,7 @@ M.levels = {
   },
   {
     id = "discover",
+    campaign = true,
     name = "Neighbours",
     -- LESSON: the garden is not empty, and ground can be taken FROM
     -- someone. A single red colony sits in the far corner, small and
@@ -216,6 +219,7 @@ M.levels = {
   },
   {
     id = "war",
+    campaign = true,
     name = "War",
     -- LESSON: everything at once, against opponents who are doing the
     -- same thing you are. Two rival colonies, on opposite sides, both
@@ -278,6 +282,7 @@ M.levels = {
   },
   {
     id = "open",
+    campaign = true,
     name = "The open field",
     blurb = "Everything, all at once.",
     generated = true,
@@ -468,6 +473,34 @@ M.levels = {
     },
   },
   {
+    id = "gatesiege2",
+    name = "Gate: defended siege",
+    blurb = "A queen behind her workers.",
+    generated = false,
+    -- PLAN 06 fixture, and the difference from `gatesiege` is the whole
+    -- point: this queen has a GARRISON. On gatesiege (no defenders) the
+    -- siege branch opens instantly, she falls within a second or two of
+    -- the column arriving, and her body is picked up in the same window
+    -- -- BEFORE the mound flips. That ordering is why test-siege passed
+    -- while the feature was broken in play.
+    --
+    -- With defenders the real sequence happens: worker-vs-worker fight
+    -- first (3s swings, cone forfeits -- plan 05 made this take a while),
+    -- THEN the queen siege, and the mound's energy grind can complete the
+    -- CAPTURE around or before an idle ant gets a chance to lift the body.
+    -- Post-capture the old pickup guard (`n.owner ~= ant.side`) is false
+    -- forever for the winning side, so the corpse sits on your own new
+    -- mound, uneaten. This board is built to hit that ordering.
+    --
+    -- Player brings enough to win decisively (the fight should end, not
+    -- grind), and has a queen at home so a carried body has somewhere to
+    -- bank -- same requirement gatesiege documents.
+    nodes = {
+      { kind = "plain", x = 0,   y = 0, own = true,  ants = 24, queens = 1 },
+      { kind = "plain", x = 700, y = 0, foe = "red", ants = 6,  queens = 1 },
+    },
+  },
+  {
     id = "gatedeath",
     name = "Gate: starvation",
     blurb = "A mound, and nothing on it.",
@@ -502,6 +535,51 @@ function M.byId(id)
 end
 
 function M.count() return #M.levels end
+
+-- THE PLAYABLE CAMPAIGN, for the level select (plan 06).
+--
+-- Marked with an explicit `campaign = true` field rather than inferred
+-- from the id ("everything not starting with `gate`"), because a naming
+-- convention is not a rule the code can enforce: the next fixture added
+-- with a tidier name would silently appear in a player's level list.
+-- The gate boards are past the end of the list on purpose (see the
+-- GATE-ONLY BOARDS banner above) and this is the second lock on that.
+function M.playable()
+  local out = {}
+  for i = 1, #M.levels do
+    if M.levels[i].campaign then out[#out + 1] = M.levels[i] end
+  end
+  return out
+end
+
+-- WHICH LEVELS THE PLAYER MAY START, given what they have beaten.
+--
+-- Every beaten level (replayable -- there is no reason to lock someone
+-- out of ground they have already taken), plus the FIRST unbeaten one:
+-- the frontier. Later unbeaten levels stay locked, so "start an
+-- uncompleted level" means the next one rather than skipping straight to
+-- the war map on a fresh file.
+--
+-- `open` is the generated everything-at-once board and never completes,
+-- so it can never itself be a frontier that hides the levels after it --
+-- there are none after it.
+function M.selectable(beaten)
+  local list = M.playable()
+  local out, frontierTaken = {}, false
+  for i = 1, #list do
+    local lv = list[i]
+    local done = beaten and beaten[lv.id] or false
+    if done then
+      out[#out + 1] = { level = lv, beaten = true, locked = false }
+    elseif not frontierTaken then
+      frontierTaken = true
+      out[#out + 1] = { level = lv, beaten = false, locked = false }
+    else
+      out[#out + 1] = { level = lv, beaten = false, locked = true }
+    end
+  end
+  return out
+end
 
 function M.next(id)
   local _, i = M.byId(id)

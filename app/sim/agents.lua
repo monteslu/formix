@@ -308,6 +308,7 @@ function M.spawn(a, nodeId, side)
   -- the real delivery finished and the actual carrier had `carry = nil`
   -- -- a DIFFERENT ant, a fresh hatch, had picked up the stale flag).
   ant.carryQueen = nil
+  ant.carryQueenSide = nil
   ant.siegeClose = nil
   ant.hp = M.cfg.maxHp
   ant.atk, ant.def = 1, 1
@@ -892,11 +893,29 @@ function M.update(a, dt)
       -- is the gate, not `n.owner ~= ant.side` alone, so the corpse
       -- stays on the ground (a visible, honest "she fell here" marker)
       -- rather than being picked up and walked home for nothing.
+      -- GUARDED ON HER SIDE, NOT ON WHO HOLDS THE GROUND (plan 06). This
+      -- read `n.owner ~= ant.side`, which means "not the defender" only
+      -- for as long as the mound has not changed hands -- and a mound
+      -- whose queen just died is a mound about to change hands. The
+      -- instant the attacker captures it, `n.owner` IS the attacker, and
+      -- the guard starts refusing the very side that earned the body:
+      -- the corpse then sits on your own new mound forever, uneaten.
+      --
+      -- Measured on gatesiege/gatesiege2 during plan 06's phase 0, the
+      -- pickup happens to win that race (she dies and is lifted inside
+      -- the same tick, before the capture lands), which is why the bug
+      -- never showed in a gate -- but the ordering was luck, not a rule,
+      -- and it inverts on any board where the last defender outlives her.
+      -- `corpseSide` is set where she falls and does not move under us.
       if n and not n.isLoc and not ant.carry and n.corpses and n.corpses > 0
-         and n.owner ~= ant.side and (n.corpseValue or 0) > 0 then
+         and (n.corpseSide or n.owner) ~= ant.side
+         and (n.corpseValue or 0) > 0 then
         n.corpses = n.corpses - 1
         ant.carry = n.corpseValue
         ant.carryQueen = true
+        -- Her colony, for the renderer: a carried queen wears her OWN
+        -- side's colour, not her carrier's.
+        ant.carryQueenSide = n.corpseSide
         a.picked = (a.picked or 0) + 1
         a.pickedBy[ant.side] = (a.pickedBy[ant.side] or 0) + 1
       end
@@ -917,6 +936,7 @@ function M.update(a, dt)
             M.bank(a, ant.side, ant.carry)
             ant.carry = nil
             ant.carryQueen = nil
+            ant.carryQueenSide = nil
           end
           -- NOWHERE TO TAKE IT: keep hold of it and ask again in a
           -- second. A colony with no queen anywhere still has its food,
@@ -1065,6 +1085,7 @@ function M.update(a, dt)
               -- correct -- the render flag alone survived every real
               -- delivery.
               ant.carryQueen = nil
+              ant.carryQueenSide = nil
               ant.goal = nil
               ant.think = 0
               a.delivered = (a.delivered or 0) + 1
@@ -1520,6 +1541,20 @@ function M.fight(a, dt)
             site.corpses = (site.corpses or 0) + 1
             site.corpseValue = (attacker == M.YOU)
                                and cfg.queenFood or cfg.queenFoodRivals
+            -- WHOSE QUEEN SHE WAS (plan 06). Two consumers, and neither
+            -- can be served by the mound's `owner`, because the mound
+            -- CHANGES HANDS moments after she falls:
+            --
+            --   1. The pickup rule. "The defender does not eat its own
+            --      fallen queen" has to be asked about HER side, not
+            --      about who holds the ground now -- once the attacker
+            --      captures, `owner` is the attacker and an owner-based
+            --      test silently swaps its meaning.
+            --   2. The renderer. A carried body is drawn in her own
+            --      colony's colour, so a red queen slung over a green
+            --      ant's back still reads as a red queen -- which is the
+            --      whole trophy.
+            site.corpseSide = site.owner
             -- Her brood dies with her: there is nobody left to tend it.
             if #queens == 0 then site.brood = {} end
           end
