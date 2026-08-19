@@ -180,10 +180,41 @@ function M.draw(snap, vp, intents)
   end
 
   -- ── the mounds ──
+  local unknownsite = require("render.unknownsite")
   for i = 1, #world.nodes do
     local n = world.nodes[i]
     if n.seen then
       local sx, sy = vp.worldToScreen(n.x, n.y)
+
+      -- ── STATE 3: NEVER VISITED ──
+      --
+      -- One grey circle, identical to the one an unvisited LOCATION
+      -- wears, at the same shared radius. Everything below this branch --
+      -- the kind's real radius, its ring geometry, its grit spill, its
+      -- entrance holes, its rim -- is a tell, and together they told the
+      -- player the whole board for free: a `rich` mound is a 104-unit
+      -- circle with four entrances, a `small` one is 56 with one, and a
+      -- spider out in the fog was the biggest circle on the map. You now
+      -- learn a place by going to it.
+      --
+      -- `visited` (never cleared) rather than `held`/`observed`: what
+      -- this branch hides is IDENTITY, and identity once learned stays
+      -- learned even after your ants walk away.
+      -- Expressed as an if/ELSE rather than a `goto continue`: a goto
+      -- aiming at a label on the enclosing loop from inside a branch is
+      -- not visible to it, and this engine only says so at LOAD time --
+      -- every gate goes red at once with `fetch failed` and nothing
+      -- renders. (See the same note in input/intents.lua.)
+      if not n.visited then
+        local ur = unknownsite.RADIUS * s
+        if sx > -ur * 4 and sx < vp.w + ur * 4
+           and sy > -ur * 4 and sy < vp.h + ur * 4 then
+          g.setColor(0.10, 0.11, 0.08, 0.35)
+          disc(sx, sy, ur * 1.15)
+          unknownsite.draw(g, sx, sy, ur)
+        end
+      else
+
       local r = n.radius * s
       local geo = geoFor(n)
 
@@ -416,7 +447,23 @@ function M.draw(snap, vp, intents)
 
       -- ENERGY, for a defended mound you are chewing through. Only shown
       -- when it has actually been damaged, so an untouched map is quiet.
-      if n.owner and n.maxEnergy and n.energy and n.energy < n.maxEnergy then
+      --
+      -- AND ONLY WHERE YOU CAN SEE IT. This arc used to be gated on
+      -- `n.owner` alone, which made it the last thing leaking live enemy
+      -- state across the whole board after plan 04 closed everything
+      -- else: a red-orange ring around every damaged mound anybody owned,
+      -- readable from across the map, saying both "somebody holds this"
+      -- and "here is how close it is to falling". `test-fog3` caught it
+      -- as 165 enemy-coloured pixels sitting on grey stone the player was
+      -- nowhere near.
+      --
+      -- How damaged a mound is is a state-1 fact, so it needs the same
+      -- presence test everything else does: your ants standing there, or
+      -- your assault inbound (an assault you are paying for is never a
+      -- secret), or it is your own ground.
+      local liveEnergy = n.held or n.contested or n.owner == "you"
+      if liveEnergy
+         and n.owner and n.maxEnergy and n.energy and n.energy < n.maxEnergy then
         local frac = math.max(0, n.energy / n.maxEnergy)
         g.setColor(0.95, 0.45, 0.30, 0.9)
         g.setLineWidth(math.max(2, vp.u(4)))
@@ -430,6 +477,7 @@ function M.draw(snap, vp, intents)
         end
         g.setLineWidth(1)
       end
+      end   -- close the visited/unvisited branch
     end
   end
 end

@@ -36,7 +36,10 @@ local PAD_BUTTONS = { "a", "b", "x", "y", "start", "select",
 local PTR_SLOTS = 10
 local ptr = {}
 for i = 0, PTR_SLOTS - 1 do
-  ptr[i] = { active = false, down = false, prevDown = false,
+  -- `dropTarget` is what the AIM ARROW is currently pointing at, carried
+  -- from the drag into the release so the drop area is never tighter than
+  -- what the player can see.
+  ptr[i] = { active = false, down = false, prevDown = false, dropTarget = nil,
              x = 0, y = 0, downX = 0, downY = 0, startNode = nil,
              dragging = false,
              -- A press that landed on empty ground drags the CAMERA rather
@@ -125,10 +128,22 @@ local function pickNode(world, wx, wy, slack)
   local best, bestD = nil, math.huge
   local function consider(n)
     if not n.seen then return end
-    -- The mound's own size, plus the same forgiveness for everyone. `slack`
-    -- arrives in world units (the caller divides by zoom once), so the
-    -- margin is a constant number of PIXELS at any scale.
-    local r = (n.radius or 60) * 1.15 + slack
+    -- The site's DRAWN size, plus the same forgiveness for everyone.
+    -- `slack` arrives in world units (the caller divides by zoom once), so
+    -- the margin is a constant number of PIXELS at any scale.
+    --
+    -- HIT WHAT IS DRAWN, NOT WHAT IS THERE. An unvisited site renders as
+    -- the shared unknown circle (render/unknownsite.lua) rather than at
+    -- its own kind's radius, so the hit area has to follow it -- otherwise
+    -- a rich mound out in the fog would be grabbable a mound-width beyond
+    -- the circle the player can actually see, and a small one would refuse
+    -- clicks that landed well inside it. That mismatch is the exact bug
+    -- class that made a send silently vanish once already (the drop
+    -- released 245 units from where the drag aimed); the rule since is
+    -- that the hit area IS the drawn shape.
+    local drawnR = n.visited and (n.radius or 60)
+                   or require("render.unknownsite").RADIUS
+    local r = drawnR * 1.15 + slack
     local dx, dy = n.x - wx, n.y - wy
     local d = dx * dx + dy * dy
     -- Nearest CENTRE among the things actually hit, so two overlapping
@@ -468,6 +483,11 @@ local function updatePad(world, agents)
     if pressed("y") then emit("debug", { what = "feed" });   M.comboUsed = true end
     if pressed("x") then emit("debug", { what = "starve" }); M.comboUsed = true end
     if pressed("b") then emit("debug", { what = "food" });   M.comboUsed = true end
+    -- SELECT+A: save round trip in place. A gate-only instrument, behind
+    -- the overlay like feed/starve, for the reason those are: a cheat one
+    -- combination away from ordinary play is a cheat that will happen by
+    -- accident.
+    if pressed("a") then emit("debug", { what = "roundtrip" }); M.comboUsed = true end
     -- Everything else is swallowed while the modifier is held, so a
     -- combo never also fires the unmodified action underneath it.
     return
@@ -656,6 +676,12 @@ local function updatePointer(world, agents)
       -- instead of being a fixed world-space disc that is far too big when
       -- you are zoomed out and too small when you are zoomed in.
       local pickR = 26 / vp.worldScale()
+      -- RELEASE IS MORE FORGIVING THAN A TAP. A tap is a considered poke
+      -- at one thing; a drag ends wherever the hand happens to stop, and
+      -- the eye is on the target rather than the fingertip. Sizing the
+      -- drop the same as the tap made aiming feel accurate and dropping
+      -- feel broken.
+      local releaseR = 84 / vp.worldScale()
 
       if p.down and not p.prevDown then
         p.downX, p.downY = p.x, p.y
@@ -819,13 +845,61 @@ local function updatePointer(world, agents)
           local dx, dy = p.x - p.downX, p.y - p.downY
           M.fraction = fractionFromDrag(math.sqrt(dx * dx + dy * dy),
                                         (M.vp and M.vp.unit) or 1)
+          -- ONE DISTANCE RULE FOR THE ARROW AND THE DROP.
+          --
+          -- These were two rules and they disagreed, which is the whole
+          -- bug. The arrow latched onto a mound as the finger crossed it
+          -- and then never let go, so it kept promising a send from
+          -- anywhere on the map; the release re-picked from scratch with
+          -- a tight radius and, a little past the mound, found nothing
+          -- and emitted NO INTENT AT ALL. No send, no refusal, nothing.
+          -- Measured at the default zoom, a drop 70px past a mound was
+          -- silent while the arrow was still drawn to it. The gesture
+          -- looked like it did nothing; the next one worked, so it read
+          -- as "sometimes it takes two tries".
+          --
+          -- Now there is a single question -- "is the finger still near
+          -- enough to that mound to mean it?" -- and both the arrow and
+          -- the drop answer it the same way. Aiming is forgiving (RELEASE
+          -- SLACK below is several times the tap slack, because a drag
+          -- ends wherever the hand stops rather than where the eye is),
+          -- and when you pull away past that, the arrow goes out. What
+          -- the player sees is exactly what the release will do.
           local t = pickNode(world, wx, wy, pickR)
-          if t and t ~= p.startNode then M.cursor.node = t end
+          if not t and p.dropTarget then
+            -- Still aiming at the last target? Re-test it with the
+            -- generous release radius rather than the tap radius.
+            local prev = W.site(world, p.dropTarget)
+            if prev then
+              local ddx, ddy = prev.x - wx, prev.y - wy
+              local keep = (prev.radius or 60) * 1.15 + releaseR
+              if ddx * ddx + ddy * ddy <= keep * keep then t = p.dropTarget end
+            end
+          end
+          if t ~= p.startNode then
+            M.cursor.node = t          -- nil once you pull away: arrow off
+            p.dropTarget = t
+          end
         end
 
       elseif (not p.down) and p.prevDown then
         if p.startNode and p.dragging and M.selected == p.startNode then
-          local target = pickNode(world, wx, wy, pickR)
+          -- DROP ON WHAT THE ARROW IS POINTING AT.
+          --
+          -- Re-picking from the release point alone made the drop area
+          -- TIGHTER than the aim: the arrow would be drawn to a mound
+          -- (picked while the finger was over it, with the same slack)
+          -- and then the release, a few pixels further on, would find
+          -- nothing and emit no intent at all -- no send, no refusal, no
+          -- feedback. Measured at the default zoom, a drop 70px past a
+          -- mound produced silence while the arrow still pointed at it.
+          --
+          -- The rule now: if the gesture was aiming at something, that is
+          -- the target. A fresh pick at the release point still wins when
+          -- it finds one (you may have moved onto a different mound in
+          -- the last few pixels), and the remembered target is the
+          -- fallback. What the player saw is what they get.
+          local target = pickNode(world, wx, wy, pickR) or p.dropTarget
           if target and target ~= p.startNode then
             local have = A.garrison(agents, p.startNode, A.YOU)
             emit("send", { from = p.startNode, to = target,
@@ -850,6 +924,7 @@ local function updatePointer(world, agents)
         p.dragging = false
         p.panning = false
         p.miniDrag = false
+        p.dropTarget = nil
       end
     end
   end

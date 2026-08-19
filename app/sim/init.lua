@@ -349,9 +349,26 @@ function M.updateVision(s)
     local n = lit[i]
     n.lit = true
     n.observed = true
-    -- Everything inside an established colony's radius is watched from it.
+    -- THE GROUND IS LIT, THE NEIGHBOURS ARE NOT WATCHED.
+    --
+    -- `lit` still spreads: an established colony's radius comes out of
+    -- the fog, which is what makes raising a queen the moment the map
+    -- opens up. But `observed` no longer travels with it, and that
+    -- deletion is the point of plan 04.
+    --
+    -- What it used to do: set `observed` on EVERY neighbour of EVERY
+    -- queened colony, every tick. So on any settled board the kinds of
+    -- neighbouring food, their live item counts, their owners and the
+    -- enemy bodies standing on them were all free, permanently, from
+    -- across the map -- for the price of a queen you were raising
+    -- anyway. Discovery was very nearly gone: there was almost nothing
+    -- left to find out by walking somewhere, which is the complaint that
+    -- started this plan.
+    --
+    -- `observed` now means exactly one thing: PRESENCE. Your ants are
+    -- standing here, or your assault is inbound (contested, below).
     local ns = W.neighbours(s.world, n)
-    for k = 1, #ns do ns[k].lit = true; ns[k].observed = true end
+    for k = 1, #ns do ns[k].lit = true end
   end
 
   -- Bodies on the ground see that ground.
@@ -381,7 +398,25 @@ function M.updateVision(s)
       local d = W.site(s.world, ant.to)
       if d then
         d.contested = true
-        d.observed = true
+        -- A FIGHT IS NEVER A SECRET, BUT AN UNOPENED BOX STAYS SHUT.
+        --
+        -- Marking the destination `observed` is what draws the garrison
+        -- defending against your assault (plan 03: an attacker dies on
+        -- arrival, so `held` never becomes true and the ants killing your
+        -- army were drawn by nothing).
+        --
+        -- It must NOT reveal what an unvisited LOCATION is, though.
+        -- Sending a column at an anonymous grey clump is the moment the
+        -- whole discovery loop pays off -- you find out what you walked
+        -- into when you get there, and sometimes it is a spider. Letting
+        -- the send itself open it means you never have to arrive, and the
+        -- clump might as well have been labelled from the start.
+        --
+        -- A site you have already visited has nothing left to hide, so
+        -- the reveal is free there.
+        if not (d.isLoc and not d.visited) then
+          d.observed = true
+        end
       end
     end
   end
@@ -397,18 +432,46 @@ function M.updateVision(s)
       if n then
         n.observed = true
         n.held = true
-        -- ...and the mounds within its reach, so a squad sees who lives
-        -- next door. Ground is NOT lit by this: `lit` still needs a queen.
+        -- YOU HAVE BEEN HERE, AND YOU WILL REMEMBER IT. Set once, never
+        -- cleared -- not by leaving, not by losing the ground.
         --
-        -- ONLY FROM A MOUND. Ants standing on a patch of food see the
-        -- patch they are standing on and nothing else: a location does
-        -- not extend what you can see any more than it extends where you
-        -- can send. Otherwise a lucky grain patch out in the dark would
-        -- quietly scout the whole corner of the map around it.
-        if not n.isLoc or n.scouts then
-          local ns = W.neighbours(s.world, n)
-          for k = 1, #ns do ns[k].observed = true end
-        end
+        -- This is NOT the "found" latch that was tried and reverted (see
+        -- render/mounds.lua): that one kept ground WARM forever -- colour,
+        -- owner, the lot -- which test-grey rightly killed, because in
+        -- this game the coloured ground IS the ground you hold. `visited`
+        -- remembers only IDENTITY: what kind of place this is and how big
+        -- it really is. The ground still goes back to grey stone the
+        -- moment your ants leave.
+        --
+        -- Set on ARRIVAL only (`at`), never on approach: a column inbound
+        -- to an unknown clump has not learned what is in it yet, which is
+        -- the whole point of walking over to find out.
+        n.visited = true
+        -- WHAT IT LOOKED LIKE WHEN YOU LEFT.
+        --
+        -- NOTHING DRAWS FROM THIS ANY MORE. A discovered patch shows its
+        -- LIVE count now (food is terrain: a field you have walked to is
+        -- one whose crop you can see standing in it, and watching grain
+        -- come back is information scouting earned). The latch is kept
+        -- because it is serialized and reported in the probe dumps, and
+        -- because "what it looked like when you left" is the natural shape
+        -- for any future memory rule -- but if you are looking for what
+        -- decides the number on screen, it is `l.items`, not this.
+        if n.isLoc then n.lastSeenItems = n.items or 0 end
+        -- A GARRISON NO LONGER SCOUTS ITS HORIZON, and that deletion is
+        -- the other half of plan 04.
+        --
+        -- This used to set `observed` on every neighbour of any mound
+        -- your ants stood on -- so the opening position alone, before the
+        -- player had done anything at all, revealed the kind and live
+        -- item count of every patch of food beside home. That is why the
+        -- generated field's guaranteed grain was legible at boot: not
+        -- because anyone had walked to it, but because somebody was
+        -- standing next door.
+        --
+        -- You now learn a place by GOING to it. Standing on one mound
+        -- tells you about that mound, and nothing about the anonymous
+        -- clumps around it.
       end
     end
   end

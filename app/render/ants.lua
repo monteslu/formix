@@ -414,15 +414,31 @@ function M.draw(snap, vp)
         --    secret, whether or not a defender is still alive to see it.
         vis = true
       elseif not ant.at then
-        -- 3. It is in the open, and a column crossing country you can see
-        --    is exactly the warning the fog was never meant to withhold.
-        --    Gated on the DESTINATION being ground you can see, so a raid
-        --    between two enemy colonies in the dark stays dark.
-        local dest = ant.to and WW.site(world, ant.to)
-        local src  = ant.from and WW.site(world, ant.from)
-        vis = (dest and (dest.owner == "you" or dest.held or dest.observed))
-           or (src and (src.owner == "you" or src.held or src.observed))
-           or false
+        -- 3. It is in the open, walking to or from somewhere you can SEE
+        --    -- ground you own, or ground one of your ants is standing on
+        --    this instant.
+        --
+        --    STRICTER THAN IT WAS, deliberately. This used to accept
+        --    `observed` at either end, and `observed` used to be set on
+        --    every neighbour of every queened colony, every tick -- so a
+        --    settled board watched most of the map for free and enemy
+        --    columns were visible almost everywhere. Plan 04 deleted that
+        --    adjacency, and this rule follows it down: an army crossing
+        --    country you are not standing in is not something you can
+        --    see, and the fog is not there to make war convenient.
+        --
+        --    The plan-03 measurements that motivated this rule ("86 enemy
+        --    ants, ten red pixels") described a board whose fog leaked
+        --    everywhere ELSE, which is what made the blind spot feel like
+        --    a bug rather than the design. With a consistent three-state
+        --    fog, an unseen army in the dark is the point. The assault
+        --    reveal (case 0) is untouched: a fight you are paying for is
+        --    still never a secret.
+        local function seeable(site)
+          return site and (site.owner == "you" or site.held) or false
+        end
+        vis = seeable(ant.to and WW.site(world, ant.to))
+           or seeable(ant.from and WW.site(world, ant.from))
       end
     end
     if vis and ant.x >= x0 and ant.x <= x1 and ant.y >= y0 and ant.y <= y1 then

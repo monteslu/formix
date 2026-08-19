@@ -95,11 +95,45 @@ a mound whose range stat grows really does reach further.
 shuttle. An ant is your army, your money and your builder, so every price is
 a number of bodies you give up — which is what makes spending feel like it.
 
-**Fog is presence, not a layer.** There is no dark sheet over the map. A
-mound renders as grey stone until one of your ants is standing on it (or a
-queen lives there), and only then does it show its garrison, its owner
-colour and its true kind. That single flag — `held` — drives the mound
-colour, the rim, the enemy bodies, the larvae, the panel and the minimap.
+**Fog is presence, not a layer.** There is no dark sheet over the map.
+Instead every site — mound and food location alike — is in exactly one of
+three states, and each has a hard ceiling on what it is allowed to draw:
+
+| state | when | may show |
+|---|---|---|
+| **present** | your ants stand here, your assault is inbound (`contested`), or a queen of yours lives here | everything: owner, garrison, enemies, live item counts |
+| **discovered** | you have stood here before, nobody friendly is here now | the *identity* only — kind and real size — rendered grey. No owner, no enemies, no live counts |
+| **unknown** | never visited | one medium-grey circle, the SAME circle for every site. Position only |
+
+Three flags carry it. `observed` means **presence** and nothing else: your
+ants are physically here, or a fight you are paying for is inbound. `held`
+is the tighter "one of yours is standing on it", and warms the ground from
+stone to earth. `visited` is the one that never clears — set the first time
+one of your ants arrives, kept through leaving, losing the ground and a save
+round trip — and it buys *identity*, never live state.
+
+Two rules are load-bearing, both learned by breaking them:
+
+- **Adjacency observes nothing.** A queened colony spreads `lit` (the ground
+  comes out of the fog, which is what makes raising a queen the moment the
+  map opens up) but does NOT spread `observed`. It used to, and the board
+  handed over neighbouring kinds, item counts, owners and enemy bodies for
+  free, forever, for the price of a queen you were raising anyway. There was
+  very nearly nothing left to learn by walking somewhere.
+- **An unknown site is one shared circle.** `render/unknownsite.lua` is the
+  only way state 3 is ever drawn, mound or location, at one uniform radius
+  and with no per-site variation at all. Drawing each kind at its own radius
+  labelled every circle on the board by size — and made the spider, the one
+  thing the fog most needs to hide, the biggest thing out there. Seeded
+  wobble was tried and cut for the same reason: any per-site variation is a
+  channel.
+
+`visited` is NOT the "found" latch that was tried and reverted. That one kept
+ground *warm* — colour, owner, the lot — which `test-grey` rightly killed,
+because in this game the coloured ground IS the ground you hold. This one
+remembers only what kind of place it is; the ground still goes back to grey
+stone the moment your ants leave.
+
 See `docs/ENGINE-NOTES.md` for why the layer approach was abandoned.
 
 ## Testing
@@ -132,6 +166,7 @@ a claim. Some gates worth knowing about:
 | `test-forage` | the food ledger closes -- ground + carried + pool + eaten always equals what was taken -- and ants deliver and STAY rather than re-foraging |
 | `test-locrules` | food is a destination, never a bridge or a watchtower |
 | `test-bootstrap` | every board can reach a fed queen from its opening position |
+| `test-fog3` | the three fog states, and that nothing leaks across them: the `visited` latch survives leaving and a save round trip, and every unvisited site on the board measures the same size and brightness whether it is a spider or a small mound |
 
 **Gates are written to fail.** Several were rewritten after passing a
 deliberately sabotaged build — the war gate first passed with the enemy AI

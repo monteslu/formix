@@ -11,7 +11,12 @@ local A = require("sim.agents")
 
 local M = {}
 -- 4: food. The pool per side, and what is left in every location.
-M.VERSION = 4
+-- 5: fog. `visited` per site -- what the player has LEARNED, which is not
+--    derivable from anything else in the blob: ownership says where you
+--    are now, never where you have been. A location also carries the item
+--    count as it looked when you last stood on it, because a discovered
+--    patch draws from memory rather than from the live number.
+M.VERSION = 5
 M.FILE = "colony"
 
 local function n2(v) return string.format("%.2f", v) end
@@ -52,7 +57,8 @@ function M.serialize(s)
   for i = 1, #s.world.locs do
     local l = s.world.locs[i]
     put("L", i, l.owner or "-", l.items or 0, n2(l.regrowT or 0),
-        l.guard or 0)
+        l.guard or 0,
+        l.visited and 1 or 0, l.lastSeenItems or -1)
   end
 
   for i = 1, #s.world.nodes do
@@ -74,7 +80,8 @@ function M.serialize(s)
         A.garrison(s.agents, n.id, "you"),
         n.owner and n.owner ~= "you"
           and A.garrison(s.agents, n.id, n.owner) or 0,
-        (n.owner and n.owner ~= "you") and n.owner or "-")
+        (n.owner and n.owner ~= "you") and n.owner or "-",
+        n.visited and 1 or 0)
   end
   return table.concat(out, "\n")
 end
@@ -119,6 +126,19 @@ function M.deserialize(s, text)
         l.items = tonumber(f[4]) or 0
         l.regrowT = tonumber(f[5]) or 0
         l.guard = tonumber(f[6]) or 0
+        -- BACKFILL FOR PRE-v5 SAVES: a location you own is one you have
+        -- certainly stood on (claiming requires arriving), so it loads as
+        -- visited. Everything else re-earns its discovery, which is the
+        -- least-wrong direction to be wrong in -- it gives knowledge back
+        -- rather than inventing it.
+        if f[7] ~= nil then
+          l.visited = f[7] == "1"
+          local ls = tonumber(f[8])
+          l.lastSeenItems = (ls and ls >= 0) and ls or nil
+        else
+          l.visited = l.owner == "you"
+          l.lastSeenItems = l.visited and l.items or nil
+        end
       end
     elseif k == "n" then
       local i = tonumber(f[2])
@@ -145,6 +165,14 @@ function M.deserialize(s, text)
         -- reloaded war map still has red and gold rather than one merged
         -- colony wearing both their mounds.
         for _ = 1, tonumber(f[11]) or 0 do A.spawn(s.agents, nd.id, foe) end
+        -- Field 13: what you have LEARNED about this mound. Same
+        -- backfill rule as a location's -- ground you own is ground you
+        -- have stood on, and everything else re-earns its discovery.
+        if f[13] ~= nil then
+          nd.visited = f[13] == "1"
+        else
+          nd.visited = nd.owner == "you"
+        end
         restored = restored + 1
       end
     end

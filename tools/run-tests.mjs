@@ -25,7 +25,7 @@ const suites = ['test-reachable', 'test-overlap', 'test-queen', 'test-grey', 'te
                 // belong in the same quarantine. Running them before
                 // test-render is exactly the mistake the note describes.
                 'test-war', 'test-food', 'test-forage', 'test-locrules',
-                'test-bootstrap'];
+                'test-bootstrap', 'test-fog3'];
 // LAST, ON PURPOSE: test-war rebuilds the cart twice (it needs its own
 // level) and the pixel gate that followed it came back with a completely
 // black frame on two separate runs, then passed 4/4 in isolation. Putting

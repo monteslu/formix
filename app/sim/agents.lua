@@ -924,16 +924,25 @@ function M.fight(a, dt)
           if (queens[1].hp or 0) <= 0 then
             table.remove(queens, 1)
             a.queensKilled = (a.queensKilled or 0) + 1
-            -- SHE IS A MEAL. A dead queen is the biggest single piece of
-            -- food on the board -- more than an aphid, more than a spider's
-            -- leg -- which is what makes storming a colony pay for the ants
-            -- it cost rather than just denying them to somebody else.
+            -- SHE IS A MEAL, BUT SOMEBODY HAS TO CARRY HER HOME.
             --
-            -- Banked to the ATTACKER through the same accumulator a carried
-            -- item uses, so it lands in their pool on the next sweep and the
-            -- food ledger still closes.
-            M.bank(a, attacker,
-                   (attacker == M.YOU) and cfg.queenFood or cfg.queenFoodRivals)
+            -- A dead queen is the biggest single piece of food on the
+            -- board -- more than an aphid, more than a spider's leg --
+            -- which is what makes storming a colony pay for the ants it
+            -- cost rather than just denying them to somebody else.
+            --
+            -- She used to bank INSTANTLY on death, which quietly made her
+            -- the only food in the game that teleports: every aphid, grain
+            -- and spider leg has to be walked back to a queen, and the
+            -- biggest prize on the board arrived by magic the moment she
+            -- fell. Now she leaves a BODY where she died, and it is
+            -- carried home like anything else -- so taking a colony and
+            -- profiting from taking it are two different things, and a
+            -- storming party that gets wiped out afterwards leaves the
+            -- corpse lying there for whoever comes next.
+            site.corpses = (site.corpses or 0) + 1
+            site.corpseValue = (attacker == M.YOU)
+                               and cfg.queenFood or cfg.queenFoodRivals
             -- Her brood dies with her: there is nobody left to tend it.
             if #queens == 0 then site.brood = {} end
           end

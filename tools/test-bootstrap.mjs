@@ -87,18 +87,34 @@ for (const level of LEVELS) {
     await d.step(40);
 
     const locs = d.all().filter(l => l.startsWith('@loc ')).map(l => {
-      const m = l.match(/@loc (\S+) (\S+) \S+ items=(\d+)\/\d+ .* observed=(\w+)/);
-      return m && { id: m[1], kind: m[2], items: +m[3], observed: m[4] === 'true' };
+      const m = l.match(/@loc (\S+) (\S+) \S+ items=(\d+)\/\d+ .* observed=(\w+).* homedist=(-?\d+) homereach=(-?\d+)/);
+      return m && { id: m[1], kind: m[2], items: +m[3], observed: m[4] === 'true',
+                    dist: +m[5], reach: +m[6] };
     }).filter(Boolean);
 
-    // `observed` is set for everything inside a queened colony's reach,
-    // and home starts with a queen -- so an observed grain patch at boot
-    // IS a grain patch inside home's reach.
-    const nearGrain = locs.filter(l => l.kind === 'grain' && l.observed);
+    // THE GUARANTEE IS ABOUT THE BOARD, NOT ABOUT WHAT THE PLAYER KNOWS.
+    //
+    // This used to assert an OBSERVED grain patch at boot, on the reading
+    // that a queened colony watches its neighbours -- so "observed grain"
+    // stood in for "grain within reach". Plan 04 deleted that adjacency
+    // observation: nothing is observed at boot any more except the ground
+    // your ants are standing on, and an anonymous clump beside home is
+    // exactly what the player is now supposed to see.
+    //
+    // The map-generation guarantee itself is unchanged and still worth
+    // gating, so assert it directly from sim truth (kind and distance,
+    // which the @loc dump reports regardless of fog) rather than through
+    // the player's knowledge of it.
+    const nearGrain = locs.filter(l => l.kind === 'grain' &&
+                                       l.dist >= 0 && l.dist <= l.reach);
     R.check(`open(seed ${seed}): grain within reach of home at boot`,
             nearGrain.length > 0,
-            `locs=${locs.length} observed=${locs.filter(l => l.observed)
-              .map(l => l.kind).join(',') || 'none'}`);
+            `locs=${locs.length} grain=${locs.filter(l => l.kind === 'grain')
+              .map(l => `${l.id}@${l.dist}/${l.reach}`).join(',') || 'none'}`);
+    R.check(`open(seed ${seed}): CONTROL: and the player cannot see it yet`,
+            !locs.some(l => l.observed),
+            `observed=${locs.filter(l => l.observed).map(l => l.kind)
+              .join(',') || 'none'}`);
     R.check(`open(seed ${seed}): and there is something in it`,
             nearGrain.some(l => l.items > 0),
             nearGrain.map(l => `${l.id}:${l.items}`).join(' '));

@@ -27,9 +27,10 @@ local COL = {
   you     = { 0.45, 0.95, 0.55 },
   them    = { 0.95, 0.35, 0.30 },
   open    = { 0.92, 0.86, 0.55 },
-  food    = { 0.60, 0.78, 0.92 },
-  -- Somewhere with something to eat, once you have been there.
-  forage  = { 0.90, 0.78, 0.36 },
+  -- EVERY site you are not standing in, mound or food, discovered or
+  -- not. One neutral grey: the minimap's version of the single unknown
+  -- circle the map draws (render/unknownsite.lua).
+  unknown = { 0.52, 0.54, 0.50 },
 }
 
 -- World bounds of everything DISCOVERED, so the minimap grows with what
@@ -144,22 +145,31 @@ function M.draw(snap, vp)
     local n = world.nodes[i]
     if n.seen then
       local x, y = toMap(n.x, n.y)
-      -- SAME FOG AS THE MAP: a mound you have never stood on shows as
-      -- unclaimed here whatever is really on it. The minimap is the one
-      -- place a player looks to read the whole board at a glance, so a
-      -- coloured dot for an enemy colony they have never visited would
-      -- hand back exactly the information the fog is withholding.
-      local known = n.held or n.owner == "you"
-      local key = (not known) and (n.colonisable and "open" or "food")
-               or (n.owner == "you") and "you"
-               or n.owner and "them"
-               or (n.colonisable and "open" or "food")
+      -- THE SAME THREE STATES AS THE MAP, and the minimap is where a leak
+      -- costs most: it is the one place a player reads the WHOLE board at
+      -- a glance, so anything it colours or shapes is known everywhere at
+      -- once.
+      --
+      --   unvisited  -> the neutral unknown colour, identical to what an
+      --                 unvisited LOCATION gets below. Never `open` vs
+      --                 `food`: that split told mound from food across the
+      --                 entire map for free.
+      --   discovered -> still neutral. You know WHAT it is (the shape
+      --                 distinction below), never who is on it now.
+      --   present    -> your ants are here: colour by side, the only
+      --                 state that may.
+      local present = n.held or (n.owner == "you" and #(n.queens or {}) > 0)
+      local key = present and ((n.owner == "you") and "you"
+                            or n.owner and "them" or "open")
+               or "unknown"
       local c = COL[key]
       -- The nest is the anchor and reads bigger; everything else is one
       -- size, because a minimap that encodes magnitude in radius is
       -- unreadable at this scale.
-      local r = (n.kind == "nest") and vp.u(7) or vp.u(5)
-      g.setColor(c[1], c[2], c[3], key == "food" and 0.7 or 0.95)
+      -- ONE SIZE FOR EVERY MOUND. `nest` drew bigger, which is a size
+      -- tell of exactly the kind the main map just stopped giving away.
+      local r = vp.u(5)
+      g.setColor(c[1], c[2], c[3], key == "unknown" and 0.7 or 0.95)
       -- Discs as fans: circle() is viewport-relative on this engine (see
       -- NOTES.md) and lands in the wrong place after a target pass.
       local pxx, pyy
@@ -174,18 +184,42 @@ function M.draw(snap, vp)
 
   -- FOOD, as small diamonds -- a different SHAPE, not just a different
   -- colour, because the one question this panel answers at a glance is
-  -- "where is my empire weak" and a fourth colour of dot does not
-  -- survive being glanced at. Grey until visited, like everything else.
+  -- "where is my empire weak" and a fourth colour of dot does not survive
+  -- being glanced at.
+  --
+  -- BUT THE SHAPE IS EARNED. An unvisited location draws as the same
+  -- neutral DOT an unvisited mound does -- same size, same colour, same
+  -- silhouette -- because a diamond out in the fog says "food is there"
+  -- to a player who has never walked over, and that is the single most
+  -- useful thing the fog is meant to be withholding. Visit it and the
+  -- diamond is yours to keep: that is the reward for scouting.
   for i = 1, #(world.locs or {}) do
     local l = world.locs[i]
     if l.seen then
       local x, y = toMap(l.x, l.y)
-      local r = vp.u(4)
-      local c = l.observed and ((l.owner == "you") and COL.you
-                            or l.owner and COL.them or COL.forage)
-                or { 0.42, 0.44, 0.46 }
-      g.setColor(c[1], c[2], c[3], l.observed and 0.95 or 0.6)
-      g.polygon("fill", x, y - r, x + r, y, x, y + r, x - r, y)
+      if not l.visited then
+        -- STATE 3: indistinguishable from an unvisited mound.
+        local r = vp.u(5)
+        local c = COL.unknown
+        g.setColor(c[1], c[2], c[3], 0.7)
+        local px, py
+        for k = 0, 10 do
+          local th = k / 10 * 6.28318
+          local qx, qy = x + math.cos(th) * r, y + math.sin(th) * r
+          if px then g.polygon("fill", x, y, px, py, qx, qy) end
+          px, py = qx, qy
+        end
+      else
+        -- Discovered or present. Colour ONLY where your ants are standing
+        -- (`held`); a patch you merely know about says nothing about who
+        -- holds it now.
+        local r = vp.u(4)
+        local c = l.held and ((l.owner == "you") and COL.you
+                          or l.owner and COL.them or COL.open)
+                  or COL.unknown
+        g.setColor(c[1], c[2], c[3], l.held and 0.95 or 0.75)
+        g.polygon("fill", x, y - r, x + r, y, x, y + r, x - r, y)
+      end
     end
   end
 

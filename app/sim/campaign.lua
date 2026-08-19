@@ -33,11 +33,22 @@ M.levels = {
     -- fed her -- so the level teaches the whole loop: gather, raise her,
     -- and bring her something to eat. The aphids are placed in easy
     -- reach and are the first food a player ever sees.
+    --
+    -- AND THE FOOD STEP BECAME A SCOUTING STEP when the three-state fog
+    -- landed. It used to say "Send ants to the aphids", which stopped
+    -- being true the moment nothing is named until you have stood on it:
+    -- at boot both clusters are anonymous grey circles, so an instruction
+    -- naming the aphids would be telling the player something the game
+    -- has deliberately stopped telling them. Discovery is now part of the
+    -- first lesson rather than something the tutorial routes around --
+    -- walk to a grey clump and find out. Here it is always aphids; later
+    -- it is sometimes a spider, and the player has already learned the
+    -- move that finds out which.
     steps = {
       "Press  A  on a mound to pick up its ants",
       "Aim with the  D-PAD, then  A  to send them",
       "Ten ants in one mound can raise a queen -- press  Y",
-      "She needs food. Send ants to the aphids.",
+      "She needs food. Send ants to a grey clump and look.",
       "They carry it home. She lays. They hatch.",
     },
     -- Deliberately no rivals and nothing hostile.

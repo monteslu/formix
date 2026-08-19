@@ -61,7 +61,7 @@ function M.reportMounds(S)
     -- assert an attack against.
     local hold = n.owner or "you"
     print(string.format(
-      "@mound %s %s g=%d gi=%d fg=%d q=%d/%d energy=%.0f reach=%.0f seen=%s brood=%d held=%s obs=%s contested=%s",
+      "@mound %s %s g=%d gi=%d fg=%d q=%d/%d energy=%.0f reach=%.0f seen=%s brood=%d held=%s obs=%s contested=%s visited=%s",
       n.id, tostring(n.owner), A.garrison(S.agents, n.id, "you"),
       A.garrisonIncoming(S.agents, n.id, "you"),
       A.garrison(S.agents, n.id, hold),
@@ -69,7 +69,8 @@ function M.reportMounds(S)
       n.energy or 0, W.reach(n), tostring(n.seen),
       n.brood and #n.brood or 0, tostring(n.held or false),
       tostring(n.observed or false),
-      tostring(n.contested or false)))
+      tostring(n.contested or false),
+      tostring(n.visited or false)))
   end
 end
 
@@ -98,12 +99,22 @@ end
 -- gate has to be able to assert that the screen does not show what this
 -- line says.
 function M.reportLocs(S)
+  local home = S.world.node[S.world.homeId]
   for i = 1, #(S.world.locs or {}) do
     local l = S.world.locs[i]
     print(string.format(
-      "@loc %s %s %s items=%d/%d value=%d guard=%d observed=%s held=%s",
+      "@loc %s %s %s items=%d/%d value=%d guard=%d observed=%s held=%s visited=%s lastseen=%d homedist=%.0f homereach=%.0f",
       l.id, l.kind, tostring(l.owner), l.items or 0, l.cap or 0,
-      l.value or 0, l.guard or 0, tostring(l.observed), tostring(l.held)))
+      l.value or 0, l.guard or 0, tostring(l.observed), tostring(l.held),
+      tostring(l.visited or false), l.lastSeenItems or -1,
+      -- SIM TRUTH, NOT PLAYER KNOWLEDGE. A gate has to be able to assert
+      -- the map-generation guarantee ("always a grain patch inside home's
+      -- reach") without that guarantee being visible to the player -- the
+      -- whole point of plan 04 is that it is not. Distance and reach are
+      -- facts about the board; `observed` above is a fact about what has
+      -- been earned.
+      home and W.dist(home, l) or -1,
+      home and W.reach(home) or -1))
   end
 end
 
@@ -176,6 +187,24 @@ function M.command(S, what)
       S.food[A.YOU] = 0
       print("@food you=0 starved")
     end
+  elseif what == "roundtrip" then
+    -- SERIALIZE, THEN DESERIALIZE BACK INTO THE LIVE SIM, in place.
+    --
+    -- The save/load path cannot be gated by rebooting the cart: romdev
+    -- hands every loadMedia a fresh save sandbox, so a reloaded cart
+    -- always starts new and an assertion built on that is testing the
+    -- harness, not the format. This exercises the actual pair of
+    -- functions against the actual state, which is the thing that can
+    -- silently drop a field.
+    if not M.overlay then
+      print("@dbg refused roundtrip (overlay off)")
+      return
+    end
+    local sv = require("sim.save")
+    local blob = sv.serialize(S)
+    local ok, msg = sv.deserialize(S, blob)
+    print(string.format("@roundtrip ok=%s %s bytes=%d",
+      tostring(ok), tostring(msg), #blob))
   elseif what == "food" then
     print(string.format("@food you=%d carried=%d dead=%s",
       sim.foodOf(S, A.YOU), A.carried(S.agents, A.YOU),

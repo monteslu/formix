@@ -112,5 +112,37 @@ const diag = await d.hold(['up','left']);
 R.check('diagonal aims', diag.some(x=>/@c select node=n5/.test(x)),
         diag.filter(x=>x.startsWith('@c')).pop() || 'no move');
 
+// --- THE DROP IS AS FORGIVING AS THE AIM ---
+//
+// A drag that crosses a mound and releases a little past it must still
+// send there, and the arrow that was drawn to that mound is the promise
+// being kept. The bug this guards against was SILENT: past a tight
+// radius the release emitted no intent at all -- no send, no refusal --
+// while the arrow was still pointing at the target, so the gesture
+// looked like it did nothing and the next attempt worked. It read as
+// "sometimes sends take two tries".
+//
+// The pair matters more than either number. Inside the release radius a
+// drop MUST land; well outside it the arrow is gone and the drop MUST
+// NOT, or "forgiving" quietly becomes "sends to whatever you last brushed
+// past, from anywhere on the map".
+for (const [off, want] of [[0, true], [50, true], [90, true], [160, false]]) {
+  await d.boot(7);
+  const st = await d.inspect();
+  const [x1, y1] = st.pos.n1, [x2, y2] = st.pos.n2;
+  const dd0 = Math.hypot(x2 - x1, y2 - y1);
+  const ux = (x2 - x1) / dd0, uy = (y2 - y1) / dd0;
+  // Straight through n2 and out the far side, so the finger genuinely
+  // crosses the target before stopping short of / past it.
+  const out = await d.drag(x1, y1, Math.round(x2 + ux * off), Math.round(y2 + uy * off));
+  const sent = (out || []).filter(l => l.startsWith('@i send')).pop();
+  await d.step(40);
+  const after = await d.inspect();
+  const landed = /send ok=true/.test(sent || '') && after.mound.n2.gi > st.mound.n2.gi;
+  R.check(`a drop ${off}px past the mound ${want ? 'SENDS' : 'does not send'}`,
+          landed === want,
+          `${sent || 'no intent'} | n2 incoming ${st.mound.n2.gi} -> ${after.mound.n2.gi}`);
+}
+
 R.check('no lua errors', d.errors().length === 0, d.errors().slice(0,2).join(' | '));
 process.exit(R.done() ? 0 : 1);

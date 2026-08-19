@@ -14,6 +14,16 @@ local mounds = require("render.mounds")
 
 local M = {}
 
+-- THE UNEXPLORED PANEL IS ONE PANEL, and that includes its BOX.
+--
+-- The two site panels are different heights (a mound has more to say
+-- than a patch of food once you know it), which is right for every state
+-- but this one. Unexplored, both print the same two rows -- and the
+-- taller box behind a mound's still told the player which they had
+-- clicked, from the silhouette, without a word of text. A gate that only
+-- compared the wording passed while the panel leaked by shape.
+M.UNKNOWN_H = 214
+
 M.COL = {
   you  = { 0.55, 0.95, 0.62 },
   them = { 0.95, 0.42, 0.35 },
@@ -51,9 +61,20 @@ function M.drawLoc(vp, snap, intents, l)
   local g = love.graphics
   local w, h = vp.u(430), vp.u(214)
   local x, y = vp.u(28), vp.h - h - vp.u(28)
-  local known = l.observed
+  -- IDENTITY IS WHAT VISITING BUYS. `observed` is presence -- true only
+  -- while your ants are actually standing here -- so keying the panel on
+  -- it made a patch you had scouted go anonymous again the moment they
+  -- left, which is the opposite of learning something. `visited` never
+  -- clears, so what you found out stays found out.
+  local known = l.visited
+  -- Ownership is a live fact here too (see the mound panel): a patch you
+  -- scouted once must not keep flying an enemy's colour on the panel
+  -- border forever after.
+  local liveL = l.held or l.owner == "you"
   local key = (not known) and "none"
-           or (l.owner == "you") and "you" or l.owner and "them" or "none"
+           or (liveL and l.owner == "you") and "you"
+           or (liveL and l.owner) and "them"
+           or "none"
   local c = M.COL[key]
 
   g.setColor(0.05, 0.07, 0.06, 0.84)
@@ -71,7 +92,11 @@ function M.drawLoc(vp, snap, intents, l)
 
   g.setFont(fTitle)
   g.setColor(c[1], c[2], c[3], 1)
-  g.print(known and (LOC_NAME[l.kind] or "Forage") or "Something", x + pad, ty)
+  -- THE SAME WORD A MOUND USES. "Something" for food and "Mound" for a
+  -- hill told the player which was which from the title bar alone,
+  -- without walking anywhere -- the fog's whole job, undone by a caption.
+  g.print(known and (LOC_NAME[l.kind] or "Forage") or "Unexplored",
+          x + pad, ty)
   ty = ty + fTitle:getHeight() + vp.u(4)
 
   g.setFont(fBody)
@@ -85,19 +110,40 @@ function M.drawLoc(vp, snap, intents, l)
   end
 
   if not known then
-    line("unexplored", "send ants to look", M.COL.none)
+    -- NOT "unexplored" AGAIN: the title one line up already says it, and
+    -- the row was spending its label restating it instead of telling the
+    -- player anything. The pair now reads as a sentence -- Unexplored /
+    -- nobody has been here / send ants to look -- and both site types
+    -- still print the SAME two rows, which is what keeps a mound and a
+    -- spider indistinguishable from the panel alone.
+    line("nobody has been here", "", M.COL.none)
+    line("", "send ants to look", M.COL.none)
   else
     line("", LOC_BLURB[l.kind] or "")
-    if (l.guard or 0) > 0 then
+    local here = l.observed
+    -- FOOD IS TERRAIN, A GUARD IS A BODY, and the panel splits on that.
+    --
+    -- The COUNT is live the moment the place is discovered: a field you
+    -- have walked to is a field whose crop you can see standing in it
+    -- from a distance, and watching grain come back is information you
+    -- earned by scouting, not something to re-earn on every visit. (The
+    -- earlier rule showed the number you last saw, which quietly turned a
+    -- known patch back into a reason to walk over and re-read it.)
+    --
+    -- WHO is on it is the half that hides, and it needs presence. See
+    -- render/locations.lua, which hides the spider herself by the same
+    -- test.
+    local count = l.items or 0
+    if (l.guard or 0) > 0 and here then
       -- She is the headline. Nothing else about the place matters while
       -- she is standing.
       line("guarded", tostring(l.guard) .. " to beat", M.COL.them)
       line("", "one ant per hit")
     else
-      line("food here", tostring(l.items or 0), M.COL.you)
+      line("food here", tostring(count), M.COL.you)
       line("each worth", tostring(l.value or 1))
       if l.regrow then line("", "it grows back") end
-      if (l.items or 0) == 0 then
+      if count == 0 then
         line("", l.regrow and "wait, or come back later" or "picked clean")
       end
     end
@@ -126,7 +172,14 @@ function M.draw(vp, snap, intents)
   -- reaches), the old height left about 50px of dead plate below the
   -- buttons on every mound that has them. 260 keeps a small margin over
   -- that measured content instead of guessing a rounder number.
-  local w, h = vp.u(430), vp.u(260)
+  -- UNEXPLORED GROUND GETS THE SAME BOX A LOCATION'S DOES (M.UNKNOWN_H).
+  -- Decided HERE, above `x, y`, because the panel is anchored to the
+  -- bottom of the screen -- `y` is derived from `h`, so setting the
+  -- height further down (next to the `known` that decides it, which is
+  -- where this first went) leaves the box the right size at the wrong
+  -- place, floating off the bottom edge.
+  local unknownBox = not n.visited
+  local w, h = vp.u(430), vp.u(unknownBox and M.UNKNOWN_H or 260)
   local x, y = vp.u(28), vp.h - h - vp.u(28)
 
   -- WHAT YOU KNOW ABOUT A MOUND YOU HAVE NEVER STOOD ON: that it is
@@ -138,9 +191,23 @@ function M.draw(vp, snap, intents)
   -- scouting send bought information the player already had. `held` (one
   -- of your ants physically present, the same flag that warms the mound
   -- from stone to earth) is what turns a shape into a known place.
-  local known = n.held or n.owner == "you"
+  -- Same rule as the location panel: identity is remembered, presence is
+  -- not. A mound you scouted keeps its name after your ants leave.
+  local known = n.visited
+  -- WHOSE IT IS IS A LIVE FACT, AND LIVE FACTS NEED PRESENCE.
+  --
+  -- `known` (visited) buys the mound's NAME and nothing else. Ownership
+  -- is state 1 information: keying the colour and the body lines off
+  -- `n.owner` alone meant a mound you had scouted once kept announcing
+  -- "defenders: unknown" in enemy red forever after -- which tells you
+  -- an enemy holds it, from anywhere on the map, for the price of one
+  -- visit however long ago. Your OWN ground is exempt: knowing what you
+  -- hold is not a leak.
+  local live = n.held or n.contested or n.owner == "you"
   local key = (not known) and "none"
-           or (n.owner == "you") and "you" or n.owner and "them" or "none"
+           or (live and n.owner == "you") and "you"
+           or (live and n.owner) and "them"
+           or "none"
   local c = M.COL[key]
 
   g.setColor(0.05, 0.07, 0.06, 0.84)
@@ -160,7 +227,12 @@ function M.draw(vp, snap, intents)
   g.setColor(c[1], c[2], c[3], 1)
   -- Even the NAME is information: "Deep mound" says this one is rich and
   -- worth taking first. Unvisited ground is just a mound.
-  g.print(known and (KIND_NAME[n.kind] or "Mound") or "Mound", x + pad, ty)
+  -- "Unexplored", NOT "Mound": the word has to match the one an
+  -- unvisited location shows, or the panel identifies the site type for
+  -- free. Once visited, the real name is the reward -- "Deep mound" says
+  -- this one is rich and worth taking first.
+  g.print(known and (KIND_NAME[n.kind] or "Mound") or "Unexplored",
+          x + pad, ty)
   ty = ty + fTitle:getHeight() + vp.u(4)
 
   g.setFont(fBody)
@@ -177,7 +249,14 @@ function M.draw(vp, snap, intents)
   if not known then
     -- Says only what is true from a distance, and names the move that
     -- would answer the question.
-    line("unexplored", "send ants to look", M.COL.none)
+    -- NOT "unexplored" AGAIN: the title one line up already says it, and
+    -- the row was spending its label restating it instead of telling the
+    -- player anything. The pair now reads as a sentence -- Unexplored /
+    -- nobody has been here / send ants to look -- and both site types
+    -- still print the SAME two rows, which is what keeps a mound and a
+    -- spider indistinguishable from the panel alone.
+    line("nobody has been here", "", M.COL.none)
+    line("", "send ants to look", M.COL.none)
   elseif key == "you" then
     line("your ants here", tostring(mine), M.COL.you)
     local nq = n.queens and #n.queens or 0
@@ -201,6 +280,11 @@ function M.draw(vp, snap, intents)
       line("defenders", "unknown", M.COL.them)
       line("", "send ants to find out")
     end
+  elseif not live then
+    -- DISCOVERED, NOBODY OF YOURS HERE. You know what kind of place this
+    -- is (the title says so) and nothing about its present state.
+    line("last seen", "nobody home", M.COL.none)
+    line("", "send ants to look again")
   else
     line("unclaimed", "send ants to take it", M.COL.none)
   end

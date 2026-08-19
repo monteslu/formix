@@ -124,7 +124,7 @@ export function driver(t, cartPath) {
       await t('input', { op: 'press', button: 'select', frames: 6 });
       await t('frame', { op: 'step', frames: 20 });
       await drain();
-      const pos = {}, mound = {};
+      const pos = {}, mound = {}, loc = {};
       for (const l of lines) {
         let m = l.match(/^@node (\w+) (-?\d+) (-?\d+)/);
         if (m) pos[m[1]] = [ +m[2], +m[3] ];
@@ -134,12 +134,29 @@ export function driver(t, cartPath) {
         // `held` and `obs` are optional for the same reason `fg` is: an
         // older cart does not print them, and a gate that silently
         // matched nothing would report every mound as missing.
-        m = l.match(/^@mound (\w+) (\S+) g=(\d+) gi=(\d+) (?:fg=(\d+) )?q=(\d+)\/(\d+) energy=(\d+) reach=(\d+) seen=(\w+) brood=(\d+)(?: held=(\w+))?(?: obs=(\w+))?/);
+        m = l.match(/^@mound (\w+) (\S+) g=(\d+) gi=(\d+) (?:fg=(\d+) )?q=(\d+)\/(\d+) energy=(\d+) reach=(\d+) seen=(\w+) brood=(\d+)(?: held=(\w+))?(?: obs=(\w+))?(?: contested=(\w+))?(?: visited=(\w+))?/);
         if (m) mound[m[1]] = { owner: m[2] === 'nil' ? null : m[2], g: +m[3], gi: +m[4],
                                fg: m[5] === undefined ? +m[3] : +m[5],
                                queens: +m[6], maxQueens: +m[7], energy: +m[8],
                                reach: +m[9], seen: m[10] === 'true', brood: +m[11],
-                               held: m[12] === 'true', observed: m[13] === 'true' };
+                               held: m[12] === 'true', observed: m[13] === 'true',
+                               contested: m[14] === 'true', visited: m[15] === 'true' };
+        // LOCATIONS TOO, and the fog gate needs them: `visited` and
+        // `lastSeenItems` are the two fields that say what the player has
+        // LEARNED about a patch, as opposed to what is in it now, and
+        // there is no pixel that distinguishes "remembered six grain"
+        // from "there are six grain there right now". Trailing fields are
+        // optional for the same reason the mound line's are: an older
+        // cart does not print them, and a regex that silently matched
+        // nothing would report every location as missing.
+        m = l.match(/^@loc (\S+) (\S+) (\S+) items=(\d+)\/(\d+) value=(\d+) guard=(\d+) observed=(\w+) held=(\w+)(?: visited=(\w+))?(?: lastseen=(-?\d+))?(?: homedist=(-?\d+))?(?: homereach=(-?\d+))?/);
+        if (m) loc[m[1]] = { kind: m[2], owner: m[3] === 'nil' ? null : m[3],
+                             items: +m[4], cap: +m[5], value: +m[6], guard: +m[7],
+                             observed: m[8] === 'true', held: m[9] === 'true',
+                             visited: m[10] === 'true',
+                             lastSeen: m[11] === undefined ? -1 : +m[11],
+                             homedist: m[12] === undefined ? -1 : +m[12],
+                             homereach: m[13] === undefined ? -1 : +m[13] };
       }
       // The camera, for the pan/zoom gate. Parsed from the same overlay
       // dump: there is no pixel that says "the view moved 300 units".
@@ -160,7 +177,7 @@ export function driver(t, cartPath) {
                       cursor: m[3] === 'nil' ? null : m[3],
                       selected: m[4] === 'nil' ? null : m[4], frac: +m[5] };
       }
-      return { pos, mound, cam, ui };
+      return { pos, mound, loc, cam, ui };
     },
     async metric() {
       await t('frame', { op: 'step', frames: 32 });

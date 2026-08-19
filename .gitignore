@@ -19,3 +19,6 @@ test/suite.log
 
 # macOS finder droppings
 .DS_Store
+
+# One-off driving scripts from debugging sessions; gates live in tools/.
+test/scratch/
