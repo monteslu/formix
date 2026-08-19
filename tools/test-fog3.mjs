@@ -613,11 +613,21 @@ R.check('a route from home to the rival exists on this board',
         path && path.length > 1,
         path ? path.join(' -> ') : 'NO PATH (reach graph disconnected?)');
 
+// PLAN 05 SLOWED COMBAT ~3x (1s swings -> 3s, plus the facing cone
+// forfeiting a swing whenever nobody is in the +/-45 degree cone), so a
+// defended hop that fell inside the old 1500-frame (25s) budget can now
+// still be fighting when this loop moves on -- `after.mound[...]` never
+// reports `you`, `at` never advances, and everything downstream (which
+// friendly mound is left in reach of the eventual "quiet" mound) is
+// built on a walk that silently stalled partway. 4500 frames (75s) is
+// generous rather than tightly retuned: this loop's job is to make
+// progress along the path, not to measure combat speed, which
+// test-battle already does precisely.
 let at = homeId2;
 for (let i = 1; i < (path || []).length; i++) {
   const st = await dd.inspect();
   await dd.send(st.pos[at], st.pos[path[i]]);
-  await dd.step(1500);
+  await dd.step(4500);
   const after = await dd.inspect();
   if (after.mound[path[i]] && after.mound[path[i]].owner === 'you') at = path[i];
 }

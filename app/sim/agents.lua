@@ -111,14 +111,51 @@ M.cfg = {
   -- except the compounding. The player gets the spoils because the player
   -- is the one who needs a reason to commit to an expensive siege.
   queenFoodRivals = 0,
-  swingPeriod  = 1.0,    -- seconds between an ant's attacks
+  -- SLOWED FROM 1.0 (plan 05): a battle you can watch, not a blur of
+  -- invisible dice. At the old any-target 1s cadence nothing on screen
+  -- explained who was winning; at 3s + the facing cone below, an ant
+  -- spends most of a fight unable to strike, which is what makes the
+  -- moment it CAN strike an event.
+  swingPeriod  = 3.0,    -- seconds between an ant's attacks
   hitChance    = 0.5,    -- ...and how often one lands at all
   hitMin       = 2,      -- damage when it does land
-  hitMax       = 3,
+  hitMax       = 4,      -- plan 05: was 3
   -- How close two ants have to be to trade blows, in mound radii. A fight
   -- happens AT the mound, so this only has to cover the ring the defenders
   -- mill in plus the arrivals pushing into it.
   fightRange   = 1.9,
+  -- THE FACING CONE (plan 05). A target must be within this cosine of the
+  -- attacker's current facing to be struck at all -- cos(45 deg), so a
+  -- cone of 90 degrees TOTAL, +/-45 either side of `ant.dir`. No target in
+  -- cone on a swing means the swing is FORFEIT (the timer still resets):
+  -- that is the rule working, not a bug. You strike when the march brings
+  -- someone across your face. See M.battleSpin for why this cannot
+  -- deadlock: the two sides are marched in OPPOSING directions, which
+  -- guarantees every pair closes and passes.
+  hitArcDot    = 0.7071067811865476,   -- cos(45 deg)
+  -- A DEAD ANT LEAVES A BODY (plan 05). Head and abdomen come apart
+  -- within a blast radius of 2x the ant's drawn size, and fade over this
+  -- many seconds before they are swept from `a.corpses`. Sim owns the
+  -- lifetime (a.corpses is state, serialized in save v6); the renderer
+  -- owns turning a seed into a scatter -- see render/ants.lua.
+  -- Raised from 10 to 20 (Luis, 2026-08-19): bodies were fading before a
+  -- player looking at the fight had time to register them.
+  corpseLife   = 20.0,
+  -- Hard cap on how many corpses `a.corpses` holds at once, oldest first.
+  -- A long war must not grow the save file without bound. If this ever
+  -- trips it is logged (a.corpsesDropped), never silently swallowed.
+  corpseCap    = 96,
+  -- ── THE SPIDER (plan 05) ────────────────────────────────────────────
+  -- She is not a toll booth: a subdual fight. Eight ants pin her eight
+  -- legs by their pincers; only while ALL eight are held can anyone else
+  -- land a hit. She kills one engaged ant every spiderKillPeriod seconds,
+  -- guaranteed -- no dice -- and (Luis, 2026-08-18) she goes for whoever
+  -- is STABBING her first: only when no strikers remain does she start
+  -- tearing leg-holders off, which frees the leg and un-subdues her.
+  -- See M.fightSpider.
+  spiderKillPeriod = 6.0,
+  spiderHp     = 20,
+  spiderLegs   = 8,
 }
 
 M.YOU = "you"
@@ -197,6 +234,13 @@ function M.new(world, rng)
     -- the dependency pointing one way: ants put deliveries in, and the
     -- sim takes them out once per tick.
     banked = {},
+    -- DEAD BODIES (plan 05). Each entry is
+    -- { x, y, side, t, seed, at } -- position and side captured at the
+    -- moment of death (BEFORE the swap-remove in `kill`), a seed rolled
+    -- once here so the renderer never re-rolls the scatter, and `t`
+    -- ticking up to cfg.corpseLife before the entry is dropped.
+    corpses = {},
+    corpsesDropped = 0,
   }
   for i = 1, M.cfg.maxAgents do
     a.pool[i] = {
@@ -254,6 +298,17 @@ function M.spawn(a, nodeId, side)
   -- appearing out of a corpse -- and stale HP would hatch a larva that is
   -- already half dead, which is the same bug wearing armour.
   ant.carry = nil
+  -- SAME TRAP, FOUND LIVE 2026-08-19: `carryQueen` is a per-ant render
+  -- flag added for the queen-carry-home feature, and it has the exact
+  -- shape this comment already warns about -- a hatchling spawned into a
+  -- recycled slot inherited a stale `carryQueen = true` from whichever
+  -- corpse used to occupy it, so a brand-new worker that had never
+  -- touched a queen's body rode the dead-queen carry art forever
+  -- (measured: `carryingQueen` stuck at 1 in the `@m` line long after
+  -- the real delivery finished and the actual carrier had `carry = nil`
+  -- -- a DIFFERENT ant, a fresh hatch, had picked up the stale flag).
+  ant.carryQueen = nil
+  ant.siegeClose = nil
   ant.hp = M.cfg.maxHp
   ant.atk, ant.def = 1, 1
   ant.fightT = a.rng() * M.cfg.swingPeriod   -- swings desynchronised
@@ -304,6 +359,325 @@ local function kill(a, i)
   a.n = a.n - 1
 end
 M.kill = kill
+
+-- A BODY, LEFT WHERE IT FELL (plan 05). Called with values already read
+-- off the ant -- see the call site in M.fight, which reads them before
+-- `kill` swap-removes the slot; calling this AFTER kill() would capture
+-- whatever ant got swapped into that index instead of the one that died.
+--
+-- The seed is rolled HERE, once, from the injected RNG -- never at draw
+-- time. render/ants.lua turns it into a head/abdomen scatter; nothing
+-- about the scatter may vary frame to frame, or two players watching the
+-- same replay would see different corpses.
+function M.pushCorpse(a, x, y, side, at)
+  local list = a.corpses
+  if #list >= M.cfg.corpseCap then
+    -- OLDEST FIRST, and COUNTED rather than silently dropped -- a long
+    -- war must not grow the save without bound, but a cap that trims
+    -- invisibly is exactly the kind of silent truncation the gates exist
+    -- to catch. A gate asserts on a.corpsesDropped if this ever trips.
+    table.remove(list, 1)
+    a.corpsesDropped = (a.corpsesDropped or 0) + 1
+  end
+  list[#list + 1] = { x = x, y = y, side = side, at = at, t = 0,
+                       seed = math.floor(a.rng() * 1e9) }
+end
+
+-- AGE AND SWEEP CORPSES. Called once a tick from M.update, same as any
+-- other timer in this file -- never from render, which must stay a pure
+-- function of state.
+function M.tickCorpses(a, dt)
+  local list = a.corpses
+  local w = 1
+  for r = 1, #list do
+    local c = list[r]
+    c.t = c.t + dt
+    if c.t < M.cfg.corpseLife then
+      list[w] = c
+      w = w + 1
+    end
+  end
+  for r = #list, w, -1 do list[r] = nil end
+end
+
+-- THE SPIDER (plan 05, section 6). Not a toll booth any more: eight ants
+-- pin her eight legs by their pincers, and only while every leg is held
+-- can anyone else land a hit on her 20 hp. She kills one engaged ant
+-- every killPeriod seconds, guaranteed -- no dice -- and goes for
+-- whoever is STABBING her first (ruling 1): only once no strikers
+-- remain does she start tearing leg-holders off, which frees the leg
+-- and un-subdues her.
+--
+-- Same split as M.fight(): this function decides what happens to bodies
+-- ALREADY standing at her location (placed there by the arrival branch
+-- in M.update, which simply lands an ant on her and does not resolve
+-- anything). Determinism discipline matches M.fight throughout: sorted
+-- ids, `a.rng` never `math.random`, corpses captured before `kill`.
+function M.fightSpider(s, dt)
+  local a, world = s.agents, s.world
+  local cfg = M.cfg
+  for li = 1, #world.locs do
+    local l = world.locs[li]
+    if l.kind == "spider" and not l.owner and l.hp then
+      -- WHO IS HERE. Sorted by pool index for determinism, same as the
+      -- mound fight's `ids`.
+      local engaged = {}
+      for i = 1, a.n do
+        if a.pool[i].at == l.id then engaged[#engaged + 1] = i end
+      end
+      if #engaged > 0 then
+        table.sort(engaged)
+
+        -- 1. FILL LEGS. A holder that died last tick already had its
+        -- slot cleared below; free legs claim the nearest engaged
+        -- ant that is not ALREADY holding a different leg.
+        local held = {}
+        for leg = 1, cfg.spiderLegs do
+          local holder = l.spiderLegs[leg]
+          if holder and not (a.pool[holder] and a.pool[holder].at == l.id) then
+            -- The holder left or died without going through the kill
+            -- path below (should not happen, but a stale reference
+            -- must not wedge a leg forever).
+            l.spiderLegs[leg] = nil
+          end
+          if l.spiderLegs[leg] then held[l.spiderLegs[leg]] = true end
+        end
+        for leg = 1, cfg.spiderLegs do
+          if not l.spiderLegs[leg] then
+            for ei = 1, #engaged do
+              local pid = engaged[ei]
+              if not held[pid] then
+                l.spiderLegs[leg] = pid
+                held[pid] = true
+                break
+              end
+            end
+          end
+        end
+
+        -- 2. HER KILL. Guaranteed, on a clock -- no roll on whether it
+        -- happens, only on WHO it takes.
+        l.killT = (l.killT or cfg.spiderKillPeriod) - dt
+        if l.killT <= 0 then
+          l.killT = l.killT + cfg.spiderKillPeriod
+          -- Strikers first (ruling 1): engaged ants NOT holding a leg.
+          local strikers = {}
+          for ei = 1, #engaged do
+            if not held[engaged[ei]] then strikers[#strikers + 1] = engaged[ei] end
+          end
+          local pool = (#strikers > 0) and strikers or engaged
+          if #pool > 0 then
+            local victim = pool[1 + math.floor(a.rng() * #pool)]
+            local ant = a.pool[victim]
+            if ant then
+              -- Free the leg she was holding, if any, so the subdued
+              -- check below reads the post-kill state.
+              for leg = 1, cfg.spiderLegs do
+                if l.spiderLegs[leg] == victim then l.spiderLegs[leg] = nil end
+              end
+              M.pushCorpse(a, ant.x, ant.y, ant.side, ant.at)
+              kill(a, victim)
+              a.killedInFight = (a.killedInFight or 0) + 1
+              -- The pool index `victim` may now hold a swapped-in ant
+              -- (kill() is a swap-remove); `engaged`'s remaining
+              -- entries were captured before this and are stale for
+              -- indices >= victim, but this tick's striking pass below
+              -- re-reads `a.pool` by id by index, so a stale id pointing
+              -- at the swapped body is corrected the same way M.fight's
+              -- forward references already tolerate -- see the note on
+              -- `held` being rebuilt next tick regardless.
+            end
+          end
+        end
+
+        -- 3. SUBDUED = every leg held THIS tick, after both the fill and
+        -- the kill above. Only then do non-holders strike her.
+        local subdued = true
+        for leg = 1, cfg.spiderLegs do
+          if not l.spiderLegs[leg] then subdued = false; break end
+        end
+        if subdued then
+          for ei = 1, #engaged do
+            local pid = engaged[ei]
+            local ant = a.pool[pid]
+            if ant and ant.at == l.id and not held[pid] then
+              ant.fightT = (ant.fightT or 0) - dt
+              if ant.fightT <= 0 then
+                ant.fightT = ant.fightT + cfg.swingPeriod
+                a.swings = (a.swings or 0) + 1
+                if a.rng() < cfg.hitChance then
+                  local roll = cfg.hitMin
+                            + math.floor(a.rng() * (cfg.hitMax - cfg.hitMin + 1))
+                  local dmg = roll * (ant.atk or 1)
+                  l.hp = l.hp - dmg
+                  a.hits = (a.hits or 0) + 1
+                  if not a.dmgMin or roll < a.dmgMin then a.dmgMin = roll end
+                  if not a.dmgMax or roll > a.dmgMax then a.dmgMax = roll end
+                end
+              end
+            end
+          end
+        end
+
+        -- 4. SHE DIES. Every leg-holder and striker present stands down
+        -- onto the now-claimed ground, same as a mound's ground-flip.
+        if l.hp <= 0 then
+          l.hp = 0
+          l.owner = a.pool[engaged[1]] and a.pool[engaged[1]].side or nil
+          l.items = math.max(l.items or 0, l.spoils or 0)
+          l.spiderLegs = {}
+          for ei = 1, #engaged do
+            local ant = a.pool[engaged[ei]]
+            if ant and ant.at == l.id then
+              ant.at, ant.from, ant.to = l.id, nil, nil
+              ant.stage, ant.goal = nil, nil
+            end
+          end
+        end
+
+        -- A FIGHT IS NEVER A SECRET (plan 04): the location reveals like
+        -- a contested mound while ants are engaged with her.
+        l.contested = true
+      end
+    end
+  end
+end
+
+-- WITHDRAWAL, WITH PARTING SHOTS (plan 05, section 6c). Pulling a side's
+-- engaged ants off the spider and walking them to a reachable site.
+-- A separate function from M.send, not a special case inside it: M.send
+-- refuses any `from` the side does not OWN (`from.owner ~= side`), and a
+-- spider location is never owned while she lives -- that gate is exactly
+-- right for ordinary sends and exactly wrong here, which is why plan 04
+-- flagged a fighting column as unselectable in the first place. This is
+-- the selectability fix, scoped to spider locations only, the plan asks
+-- for -- mound battles get no such path (still Open).
+--
+-- Returns the count that survives to walk out (0 if nothing was engaged
+-- or no route exists), matching M.send's contract so the caller can
+-- refuse the same way a failed send does.
+function M.withdrawFromSpider(a, spiderId, toId, side)
+  local world = a.world
+  local l = W.site(world, spiderId)
+  local to = W.site(world, toId)
+  if not l or l.kind ~= "spider" or not to or spiderId == toId then return 0 end
+  if not W.path(world, spiderId, toId, side) then return 0 end
+
+  -- Everyone of this side currently engaged, sorted for determinism --
+  -- same discipline as M.fight and M.fightSpider throughout this plan.
+  local engaged, holders = {}, {}
+  for i = 1, a.n do
+    local ant = a.pool[i]
+    if ant.at == spiderId and ant.side == side then engaged[#engaged + 1] = i end
+  end
+  if #engaged == 0 then return 0 end
+  table.sort(engaged)
+  if l.spiderLegs then
+    for leg = 1, M.cfg.spiderLegs do
+      if l.spiderLegs[leg] then holders[l.spiderLegs[leg]] = true end
+    end
+  end
+
+  -- THE PRICE: the moment withdrawal is ordered she gets ONE guaranteed
+  -- parting kill, plus a second at 50% -- "a loss or two", exactly as
+  -- asked (Luis, 2026-08-18) -- taken from the withdrawing ants, HOLDERS
+  -- PREFERRED (ruling in section 6c: "they are the ones letting go in
+  -- her face"). Rolled from `a.rng`, at the tick the order lands, so a
+  -- replay withdraws the same bodies every time.
+  local function partingVictimPool()
+    local pool = {}
+    for i = 1, #engaged do
+      if holders[engaged[i]] then pool[#pool + 1] = engaged[i] end
+    end
+    if #pool == 0 then pool = engaged end
+    return pool
+  end
+  local toKill = {}
+  local kills = 1 + ((a.rng() < 0.5) and 1 or 0)
+  for _ = 1, kills do
+    -- Re-pool each kill so a second parting shot still prefers a
+    -- REMAINING holder over a striker, not the first roll's snapshot.
+    local pool = {}
+    for i = 1, #engaged do
+      local already = false
+      for j = 1, #toKill do if toKill[j] == engaged[i] then already = true break end end
+      if not already and holders[engaged[i]] then pool[#pool + 1] = engaged[i] end
+    end
+    if #pool == 0 then
+      for i = 1, #engaged do
+        local already = false
+        for j = 1, #toKill do if toKill[j] == engaged[i] then already = true break end end
+        if not already then pool[#pool + 1] = engaged[i] end
+      end
+    end
+    if #pool > 0 then
+      toKill[#toKill + 1] = pool[1 + math.floor(a.rng() * #pool)]
+    end
+  end
+
+  -- Free every leg this side held (a striker never held one, so this is
+  -- a no-op for them): the fight goes cold, exactly as the plan asks --
+  -- survivors that re-engage later retake legs one by one, no discount.
+  if l.spiderLegs then
+    for leg = 1, M.cfg.spiderLegs do
+      local holder = l.spiderLegs[leg]
+      if holder then
+        for i = 1, #engaged do
+          if engaged[i] == holder then l.spiderLegs[leg] = nil; break end
+        end
+      end
+    end
+  end
+
+  -- KILL THE MARKED FEW FIRST, by pool index descending, so an earlier
+  -- swap-remove never invalidates a later index still to be processed
+  -- (the same forward-reference discipline M.fightSpider's own kill
+  -- call documents). Corpse captured before kill(), same as every other
+  -- death in this file.
+  table.sort(toKill, function(x, y) return x > y end)
+  local killedSet = {}
+  for i = 1, #toKill do
+    local pid = toKill[i]
+    local ant = a.pool[pid]
+    if ant then
+      M.pushCorpse(a, ant.x, ant.y, ant.side, ant.at)
+      killedSet[pid] = true
+      kill(a, pid)
+    end
+  end
+
+  -- WALK THE SURVIVORS OUT. Re-scan rather than trust `engaged`: kill()
+  -- is a swap-remove, so any index at or above the lowest killed index
+  -- may now hold a different ant than when `engaged` was built.
+  local sent = 0
+  for i = 1, a.n do
+    local ant = a.pool[i]
+    if ant.at == spiderId and ant.side == side then
+      ant.goal = toId
+      ant.from, ant.to = spiderId, W.nextHop(world, spiderId, toId, side) or toId
+      ant.stage = "rim"
+      ant.t = 0
+      ant.at = nil
+      sent = sent + 1
+    end
+  end
+  -- A FIGHT NEVER SECRET, one tick more: the withdrawal itself, and the
+  -- parting kills that came with it, happen on ground that was already
+  -- contested -- nothing to clear here, M.fightSpider's own scan drops
+  -- `contested` on the next tick once nobody of either side remains.
+  a.sent = a.sent + sent
+  -- REPORTED ATOMICALLY, in the same call that ordered the withdrawal:
+  -- hp is a fact of the fight up to and including this tick, engaged
+  -- and kills describe what THIS order did to it -- test-spider #9
+  -- reads this line rather than a before/after pair of separately-timed
+  -- inspects, which the fight's own ongoing damage clock would
+  -- contaminate (same reasoning as probe.lua's killholder/roundtrip
+  -- snapshots).
+  print(string.format(
+    "@withdraw spider=%s engaged=%d kills=%d survivors=%d hp=%d",
+    spiderId, #engaged, #toKill, sent, l.hp or 0))
+  return sent
+end
 
 -- How many of a side's ants are sitting at a node. This is the number the
 -- player spends; ants in transit belong to nobody yet.
@@ -496,6 +870,37 @@ function M.update(a, dt)
         a.pickedBy[ant.side] = (a.pickedBy[ant.side] or 0) + 1
       end
 
+      -- A FALLEN QUEEN, THE SAME RULE (Luis, 2026-08-19: "you didn't
+      -- carry queen's body back to hive"). `M.fight`'s siege loop sets
+      -- `site.corpses`/`site.corpseValue` on a mound when a queen falls
+      -- but nothing ever consumed them -- the body sat there forever,
+      -- and the plan-05 note beside that code ("she leaves a BODY...
+      -- carried home like anything else") was aspirational, not built.
+      -- Picked up by the WINNING side, not `n.owner` -- a queen's death
+      -- does not flip the mound (only the LAST queen falling, and then
+      -- only after the energy grind in M.fight's queenless branch, does
+      -- that), so `n.owner == ant.side` would never be true for the
+      -- attacker who is actually standing over the body. One ant, one
+      -- corpse, same as an item -- and the same `ant.carry` field feeds
+      -- the ordinary dispatchCarrier/bank path below, so a queen's body
+      -- makes the same walk-home trip any other prize does.
+      --
+      -- WORTH ZERO TO A RIVAL, ON PURPOSE (`cfg.queenFoodRivals = 0` --
+      -- see formix-combat-hp-dice-and-queen-bounty.md: unbounded queen
+      -- bounty to AI rivals snowballs). A rival killing the player's
+      -- queen leaves a body nobody bothers to carry -- `n.corpseValue`
+      -- is the gate, not `n.owner ~= ant.side` alone, so the corpse
+      -- stays on the ground (a visible, honest "she fell here" marker)
+      -- rather than being picked up and walked home for nothing.
+      if n and not n.isLoc and not ant.carry and n.corpses and n.corpses > 0
+         and n.owner ~= ant.side and (n.corpseValue or 0) > 0 then
+        n.corpses = n.corpses - 1
+        ant.carry = n.corpseValue
+        ant.carryQueen = true
+        a.picked = (a.picked or 0) + 1
+        a.pickedBy[ant.side] = (a.pickedBy[ant.side] or 0) + 1
+      end
+
       -- LADEN: take it to the nearest queen. This is the ONE piece of
       -- movement the player did not order, and it is the shortest one
       -- possible -- there and back, then it stays. It does NOT return for
@@ -511,6 +916,7 @@ function M.update(a, dt)
           if r == "here" then
             M.bank(a, ant.side, ant.carry)
             ant.carry = nil
+            ant.carryQueen = nil
           end
           -- NOWHERE TO TAKE IT: keep hold of it and ask again in a
           -- second. A colony with no queen anywhere still has its food,
@@ -528,13 +934,38 @@ function M.update(a, dt)
         --
         -- (Wandering to random spots was the previous attempt: it looked
         -- like milling but never resolved into a ring around the hill.)
-        ant.phase = ant.phase + dt * M.cfg.circulate * ant.speed * (n.spin or 1)
+        --
+        -- WHILE THE MOUND IS AT WAR (plan 05), a side's OWN battleSpin
+        -- overrides the mound's ordinary spin -- see M.fight, which rolls
+        -- it once per battle and clears it once the fight ends. This is
+        -- what feeds the facing cone: opposing spins guarantee every
+        -- enemy pair closes and passes rather than orbiting in lockstep.
+        local spin = (n.battleSpin and n.battleSpin[ant.side]) or n.spin or 1
+        ant.phase = ant.phase + dt * M.cfg.circulate * ant.speed * spin
         -- A slow breathe in and out of the lane, so the band is alive
         -- rather than a drawn circle.
+        --
+        -- BUG FOUND LIVE 2026-08-19: `siegeClose` (set once, in
+        -- M.fight's siege loop below) only guards against RE-tightening
+        -- an already-close attacker -- it did nothing to stop THIS
+        -- periodic re-roll from firing again once `ant.wt` next expired
+        -- and putting the ant straight back on the wide wanderInner/
+        -- wanderOuter band, `siegeClose` still `true` the whole time.
+        -- Measured live: a 12-ant siege where 9 ants sat correctly tight
+        -- (orbit ~0.13-0.27) and 3 had drifted back out to ~1.40-1.50 --
+        -- exactly the ordinary wander range -- because their `wt` timer
+        -- had ticked over since the one-time tightening. Re-rolling
+        -- WITHIN the siege band while `siegeClose` holds keeps the same
+        -- "breathe in and out" liveliness this comment already wanted,
+        -- just around the tight ring instead of the wide one.
         ant.wt = ant.wt - dt
         if ant.wt <= 0 then
-          ant.orbit = M.cfg.wanderInner
-                      + a.rng() * (M.cfg.wanderOuter - M.cfg.wanderInner)
+          if ant.siegeClose then
+            ant.orbit = 0.10 + a.rng() * 0.20
+          else
+            ant.orbit = M.cfg.wanderInner
+                        + a.rng() * (M.cfg.wanderOuter - M.cfg.wanderInner)
+          end
           ant.wt = 2.5 + a.rng() * 4.0
         end
         local r = n.radius * ant.orbit
@@ -622,6 +1053,18 @@ function M.update(a, dt)
                and #(dest.queens or {}) > 0 then
               M.bank(a, ant.side, ant.carry)
               ant.carry = nil
+              -- FOUND LIVE 2026-08-19, the SECOND of two bank sites --
+              -- this one, not the "already standing here" shortcut
+              -- above, is what actually clears a carrying ant's queen
+              -- flag in ordinary play: a carrier almost always banks
+              -- HERE, mid-arrival after a real walk, not via the
+              -- instant "here" path, which only fires when the pickup
+              -- and the delivery are the same mound. Missing this line
+              -- is why `carryingQueen` stuck at 1 forever in the
+              -- `@m` line even though `ant.carry` and `food` were both
+              -- correct -- the render flag alone survived every real
+              -- delivery.
+              ant.carryQueen = nil
               ant.goal = nil
               ant.think = 0
               a.delivered = (a.delivered or 0) + 1
@@ -678,25 +1121,24 @@ function M.update(a, dt)
             else
               ant.goal = nil
             end
-          elseif dest.isLoc and (dest.guard or 0) > 0 then
-            -- SHE IS GUARDED. The spider is checked before anything else
-            -- about the place, so "claimed but still guarded" is a state
-            -- that cannot exist rather than one that has to be handled.
+          elseif dest.isLoc and dest.kind == "spider" and not dest.owner then
+            -- SHE IS A FIGHT (plan 05), checked before anything else
+            -- about the place, so "claimed but still being fought" is a
+            -- state that cannot exist rather than one that has to be
+            -- handled -- the same discipline the old guard branch used,
+            -- with a different fight underneath it. An arriving ant
+            -- simply ENGAGES (stands at her location) and the subdual
+            -- resolves over the following seconds in M.fightSpider, the
+            -- same split M.fight() uses for a mound: this function
+            -- places bodies, that one decides what happens to them.
             --
-            -- Six defenders wearing one body: every ant that reaches her
-            -- trades itself for one hit, which is the same bargain as
-            -- attacking a defended mound. When she falls, the legs are
-            -- lying there to be carried off.
-            dest.guard = dest.guard - 1
-            if dest.guard <= 0 then
-              dest.guard = 0
-              dest.owner = ant.side
-              dest.items = math.max(dest.items or 0, dest.spoils or 0)
-              ant.at, ant.from, ant.to = ant.to, nil, nil
-              ant.stage, ant.goal = nil, nil
-            else
-              dead = true
-            end
+            -- No `dead = true` branch here any more -- a too-small send
+            -- is not an instant loss on arrival, it is a fight that can
+            -- run long and grind (ruling 3), and grinding is resolved by
+            -- her kill clock in M.fightSpider, not by refusing the ant a
+            -- place to stand.
+            ant.at, ant.from, ant.to = ant.to, nil, nil
+            ant.stage, ant.goal = nil, nil
           elseif dest.owner == nil then
             -- Taking a mound en route is fine, and it ends the journey:
             -- an ant that has just claimed ground stays to hold it.
@@ -733,6 +1175,34 @@ function M.update(a, dt)
     end
 
     if dead then kill(a, i) else i = i + 1 end
+  end
+
+  -- DEBUG FACE LOCK (plan 05, test-battle's cone gate ONLY). Set by
+  -- probe.command's faceaway/facetoward/faceoff, never by ordinary play.
+  -- Runs AFTER the loop above so it overwrites whatever M.face just
+  -- derived from this tick's movement -- a milling ant's `dir` is
+  -- re-derived from displacement every frame, so anything that ran
+  -- before this point would be clobbered on the very next tick.
+  if a.debugFaceLock then
+    for i = 1, a.n do
+      local ant = a.pool[i]
+      if ant.side == M.YOU and ant.at then
+        local best, bestD = nil, math.huge
+        for j = 1, a.n do
+          local t = a.pool[j]
+          if t.side ~= M.YOU and t.at == ant.at then
+            local dx, dy = t.x - ant.x, t.y - ant.y
+            local d2 = dx * dx + dy * dy
+            if d2 < bestD then best, bestD = t, d2 end
+          end
+        end
+        if best then
+          local toward = math.atan(best.y - ant.y, best.x - ant.x)
+          ant.dir = (a.debugFaceLock == "facetoward") and toward
+                    or (toward + math.pi)
+        end
+      end
+    end
   end
 end
 
@@ -790,14 +1260,59 @@ function M.fight(a, dt)
       if not firstSide then firstSide = s
       elseif s ~= firstSide then mixed = true; break end
     end
+    local site = W.site(a.world, ids[k])
     if mixed then
+      -- BATTLE SPIN (plan 05): the two sides march the perimeter in
+      -- OPPOSING directions, rolled once when the mound first goes mixed
+      -- and cleared the moment it stops being mixed. This is what feeds
+      -- the facing cone above -- if both sides circulated the same way
+      -- (the ordinary `n.spin`), two ants could orbit in lockstep and
+      -- NEVER face each other, and a cone requirement would deadlock the
+      -- fight. Opposing spins guarantee every pair closes and passes.
+      --
+      -- Sides are SORTED before rolling, and the roll comes from `a.rng`,
+      -- so the same seed produces the same assignment -- the same
+      -- determinism discipline as the sort on `ids` above.
+      if site and not site.battleSpin then
+        local sides, seen = {}, {}
+        for gi = 1, #group do
+          local sd = a.pool[group[gi]].side
+          if not seen[sd] then seen[sd] = true; sides[#sides + 1] = sd end
+        end
+        table.sort(sides)
+        site.battleSpin = {}
+        local s0 = (a.rng() < 0.5) and 1 or -1
+        for si = 1, #sides do
+          -- First two sides split opposite. A THIRD side arriving mid-
+          -- fight (the war map is three-way) is assigned the opposite of
+          -- the first side already spinning, so it does not silently
+          -- inherit a lockstep match with whichever enemy it shares a
+          -- sign with.
+          --
+          -- DEBUG SABOTAGE ONLY (plan 05, test-battle's no-deadlock
+          -- control): a.debugForceSameSpin makes every side spin the
+          -- SAME way, which is exactly the bug opposite-marching exists
+          -- to prevent -- two ants can then orbit in lockstep and never
+          -- close. Never set by ordinary play.
+          site.battleSpin[sides[si]] = a.debugForceSameSpin and s0 or (
+            (si == 1) and s0
+            or (si == 2) and -s0
+            or -site.battleSpin[sides[1]])
+        end
+      end
       for gi = 1, #group do
         local ant = a.pool[group[gi]]
         if ant.hp and ant.hp > 0 then
           ant.fightT = (ant.fightT or 0) - dt
           if ant.fightT <= 0 then
             ant.fightT = (ant.fightT or 0) + cfg.swingPeriod
-            -- STRIKE THE NEAREST ENEMY, not the first one in the list.
+            -- SWING ATTEMPTS, counted whether or not a target was in
+            -- cone -- the cadence gate (test-battle 1) asserts on
+            -- ATTEMPTS, not landings, because a landing also depends on
+            -- the 50% hit roll and would conflate two different rules.
+            a.swings = (a.swings or 0) + 1
+            -- STRIKE THE NEAREST ENEMY IN THE FACING CONE (plan 05), not
+            -- the first one in the list and not just the nearest.
             --
             -- Picking by pool order made the fight non-spatial: an ant on
             -- the far rim could be hitting a body on the opposite side of
@@ -807,19 +1322,31 @@ function M.fight(a, dt)
             -- the point of contact, and a flanking send is a real move
             -- rather than a relabelled reinforcement.
             --
+            -- THE CONE: an enemy behind an ant is not a target, whatever
+            -- its distance -- this is what makes opposite-direction
+            -- marching (M.battleSpin) matter. An ant with nobody in its
+            -- +/-45 degree cone this tick simply does not swing; fightT
+            -- has already been reset above, so the attempt is spent
+            -- either way, exactly as a real miss would be.
+            --
             -- Ties resolve by pool index (the `<` keeps the first found),
             -- so this stays deterministic for a given seed.
+            local fx, fy = math.cos(ant.dir or 0), math.sin(ant.dir or 0)
             local target, bestD = nil, math.huge
             for tj = 1, #group do
               local t = a.pool[group[tj]]
               if t.side ~= ant.side and t.hp and t.hp > 0 then
                 local ddx, ddy = t.x - ant.x, t.y - ant.y
                 local d2 = ddx * ddx + ddy * ddy
-                if d2 < bestD then target, bestD = t, d2 end
+                if d2 < bestD then
+                  local d = math.sqrt(d2)
+                  local inCone = d > 0 and (ddx * fx + ddy * fy) / d >= cfg.hitArcDot
+                  if inCone then target, bestD = t, d2 end
+                end
               end
             end
             if target then
-              -- HALF THE SWINGS MISS. The other half land for 2 or 3,
+              -- HALF THE SWINGS MISS. The other half land for 2 to 4,
               -- scaled by the attacker's atk and the target's def.
               if a.rng() < cfg.hitChance then
                 local roll = cfg.hitMin
@@ -833,21 +1360,38 @@ function M.fight(a, dt)
                 -- love.audio call inside the simulation, which is the wall
                 -- this whole codebase is built around.)
                 a.hits = (a.hits or 0) + 1
+                -- THE UNSCALED ROLL, min/max over the run (plan 05's
+                -- test-battle damage-bounds gate). Tracked as the raw
+                -- roll rather than `dmg` because atk/def multipliers are
+                -- 1 for every ant today and would otherwise silently
+                -- validate a wrong hitMax if a future upgrade changed
+                -- them -- this asserts the DICE, not their scaling.
+                if not a.dmgMin or roll < a.dmgMin then a.dmgMin = roll end
+                if not a.dmgMax or roll > a.dmgMax then a.dmgMax = roll end
               end
             end
           end
         end
       end
+    elseif site and site.battleSpin then
+      -- THE MOUND STOPPED BEING MIXED: clear the spin so the NEXT battle
+      -- here rolls fresh rather than inheriting a stale assignment from a
+      -- fight that already ended.
+      site.battleSpin = nil
     end
   end
 
   -- Clear the dead. BACKWARD, because kill() is a swap-remove: forward
   -- iteration skips an ant every time one dies (the discipline this file
-  -- documents at M.spend).
+  -- documents at M.spend). Position and side are CAPTURED HERE, before
+  -- kill() swaps the slot out from under them -- the resolved value, not
+  -- a re-derivation (see M.pushCorpse: capturing after kill() would read
+  -- whatever ant got swapped into this index instead).
   for i = a.n, 1, -1 do
     local ant = a.pool[i]
     if ant.hp and ant.hp <= 0 then
       a.killedInFight = (a.killedInFight or 0) + 1
+      M.pushCorpse(a, ant.x, ant.y, ant.side, ant.at)
       kill(a, i)
     end
   end
@@ -895,6 +1439,22 @@ function M.fight(a, dt)
         -- That is what makes a settled mound worth more than the dirt, and
         -- what gives a defender something to reinforce toward.
         local queens = site.queens
+        -- CLEAR THE CLOSE-IN FLAG for anyone who is no longer besieging A
+        -- QUEEN at this mound -- an ant that left, or a fresh arrival
+        -- reusing a swapped pool slot (kill() is a swap-remove), starts
+        -- at the ordinary wander orbit and only tightens once confirmed
+        -- attacking below. Also covers the queen's OWN death: once
+        -- `queens` empties this scan is the only thing left running for
+        -- these ants (the branch below falls to the queenless "dig out
+        -- the ground" case, which never touches position), so without
+        -- this an ant that sieged her and then just stood there after
+        -- she fell would mill unnaturally tight forever.
+        for i = 1, a.n do
+          local ant = a.pool[i]
+          local stillSieging = ant.at == id and ant.side ~= site.owner
+                                and queens and #queens > 0
+          if ant.siegeClose and not stillSieging then ant.siegeClose = nil end
+        end
         if queens and #queens > 0 then
           -- Every attacker present chews on the nearest queen. She has five
           -- workers' worth of body (cfg.queenHp), so this is a real siege
@@ -904,6 +1464,23 @@ function M.fight(a, dt)
           for i = 1, a.n do
             local ant = a.pool[i]
             if ant.at == id and ant.side ~= site.owner then
+              -- SHE IS THE TARGET, SO CLOSE ON HER (Luis, 2026-08-19):
+              -- an attacker sieging the queen used to keep its ordinary
+              -- wanderInner/wanderOuter milling orbit -- the same ring a
+              -- peaceful idling ant sits at -- so a siege looked exactly
+              -- like a garrison standing around, nothing on screen ever
+              -- pointed at what was actually being attacked. `queenPos`
+              -- (render/ants.lua) draws her within 0.34 mound-radii of
+              -- centre; pulling an attacker's orbit down to that band
+              -- makes the siege visually converge on her instead of
+              -- staying parked on the perimeter. Set once (not every
+              -- tick) so `ant.wt`'s own re-roll timer (the idling block's
+              -- "breathe in and out") still governs the small drift
+              -- around that tighter ring, rather than fighting it.
+              if not ant.siegeClose then
+                ant.orbit = 0.10 + a.rng() * 0.20
+                ant.siegeClose = true
+              end
               ant.fightT = (ant.fightT or 0) - dt
               if ant.fightT <= 0 then
                 ant.fightT = (ant.fightT or 0) + cfg.swingPeriod

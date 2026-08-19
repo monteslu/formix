@@ -16,7 +16,9 @@
 -- same stream and the parity gate means something.
 --
 -- Intents produced:
---   send    {from, to, count}
+--   send      {from, to, count}
+--   withdraw  {from, to}     -- plan 05, 6c: dragging OFF a live spider
+--                                fight your ants are engaged in
 --   queen   {node}
 --   upgrade {node, stat}
 --   select  {node}          -- cursor/selection moved (UI only)
@@ -433,9 +435,15 @@ local function updatePad(world, agents)
     end
     if pressed("a") then
       if M.cursor.node and M.cursor.node ~= M.selected then
-        local have = A.garrison(agents, M.selected, A.YOU)
-        emit("send", { from = M.selected, to = M.cursor.node,
-                       count = math.max(1, math.floor(have * M.fraction + 0.5)) })
+        -- Same withdrawal special-case as the touch path -- see its note.
+        local startSite = W.site(world, M.selected)
+        if startSite and startSite.kind == "spider" and (startSite.hp or 0) > 0 then
+          emit("withdraw", { from = M.selected, to = M.cursor.node })
+        else
+          local have = A.garrison(agents, M.selected, A.YOU)
+          emit("send", { from = M.selected, to = M.cursor.node,
+                         count = math.max(1, math.floor(have * M.fraction + 0.5)) })
+        end
         M.selected = nil
       else
         M.selected = nil
@@ -488,6 +496,19 @@ local function updatePad(world, agents)
     -- combination away from ordinary play is a cheat that will happen by
     -- accident.
     if pressed("a") then emit("debug", { what = "roundtrip" }); M.comboUsed = true end
+    -- SELECT+LEFT / SELECT+RIGHT: snap every player ant's facing away
+    -- from / toward the nearest enemy in its mound. Plan 05's
+    -- test-battle cone gate ONLY -- see probe.command's "faceaway" note.
+    if pressed("left") then emit("debug", { what = "faceaway" });   M.comboUsed = true end
+    if pressed("right") then emit("debug", { what = "facetoward" }); M.comboUsed = true end
+    if pressed("up") then emit("debug", { what = "faceoff" }); M.comboUsed = true end
+    if pressed("down") then emit("debug", { what = "samespin" }); M.comboUsed = true end
+    -- SELECT+L: force-kill one of the player's spider leg-HOLDERS.
+    -- test-spider #4 only ("leg-holder death frees the leg") -- there is
+    -- no ordinary way to pick which ant among several dies on a given
+    -- tick, and the assertion needs a specific one, a holder, to die on
+    -- command while the fight is otherwise running normally.
+    if pressed("l") then emit("debug", { what = "killholder" }); M.comboUsed = true end
     -- Everything else is swallowed while the modifier is held, so a
     -- combo never also fires the unmodified action underneath it.
     return
@@ -777,7 +798,20 @@ local function updatePointer(world, agents)
             -- put it down without a press-time deselect breaking drags.
             p.tapWasSelected = (M.selected == n)
             if not nd then nd = world.loc and world.loc[n] end
-            if nd and nd.owner == A.YOU then
+            -- PLAN 05, 6c: a live spider is never OWNED (`nd.owner` stays
+            -- nil throughout the fight), so the ownership check above
+            -- would leave an engaged column permanently unselectable --
+            -- exactly the gap plan 04 flagged. Selectable here ONLY when
+            -- the player has ants actually engaged with her; an
+            -- undiscovered or untouched spider still refuses selection
+            -- like any other unowned ground.
+            local engagedHere = nd and nd.kind == "spider" and (nd.hp or 0) > 0
+                                 and A.garrison(agents, n, A.YOU) > 0
+            print(string.format("@dbgpress n=%s kind=%s hp=%s garr=%d engagedHere=%s",
+              tostring(n), nd and tostring(nd.kind) or "nil",
+              nd and tostring(nd.hp) or "nil",
+              nd and A.garrison(agents, n, A.YOU) or -1, tostring(engagedHere)))
+            if nd and (nd.owner == A.YOU or engagedHere) then
               M.selected = n
               M.fraction = 1.0
             end
@@ -901,10 +935,22 @@ local function updatePointer(world, agents)
           -- fallback. What the player saw is what they get.
           local target = pickNode(world, wx, wy, pickR) or p.dropTarget
           if target and target ~= p.startNode then
-            local have = A.garrison(agents, p.startNode, A.YOU)
-            emit("send", { from = p.startNode, to = target,
-                           count = math.max(1,
-                                     math.floor(have * M.fraction + 0.5)) })
+            -- PLAN 05, 6c: dragging off a spider you are fighting is a
+            -- WITHDRAWAL, not a send -- M.send refuses `from` a side
+            -- does not own, and a live spider is never owned. Every
+            -- engaged ant leaves (there is no fractional withdrawal;
+            -- the plan's gesture is "pull them out", not "pull some
+            -- out"), at the parting-kill price M.withdrawFromSpider
+            -- charges.
+            local startSite = W.site(world, p.startNode)
+            if startSite and startSite.kind == "spider" and (startSite.hp or 0) > 0 then
+              emit("withdraw", { from = p.startNode, to = target })
+            else
+              local have = A.garrison(agents, p.startNode, A.YOU)
+              emit("send", { from = p.startNode, to = target,
+                             count = math.max(1,
+                                       math.floor(have * M.fraction + 0.5)) })
+            end
           end
           M.selected = nil
         elseif p.startNode and not p.dragging then

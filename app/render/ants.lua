@@ -13,6 +13,8 @@
 local trails = require("render.trails")
 
 local WW = require("sim.world")
+local AA = require("sim.agents")
+local locationsMod = require("render.locations")
 
 local M = {}
 
@@ -253,6 +255,40 @@ end
 M.queenBody = queenBody
 M.larva = larva
 
+-- A DEAD ANT (plan 05): the head and the abdomen -- gaster and head, in
+-- this body's terms, the two ends of `body()`'s three segments -- come
+-- apart within a blast radius of 2x the ant's drawn size and fade over
+-- corpseLife seconds. The thorax between them is left out on purpose: it
+-- is the least legible piece at ant scale, and two recognisable ends
+-- read as a body where three crowded ovals would read as noise.
+--
+-- EVERYTHING HERE COMES FROM `seed`, rolled ONCE in the sim at the
+-- moment of death (agents.lua M.pushCorpse) and never touched again --
+-- capture-the-resolved-value, the same discipline a scored frame or a
+-- resolved probe follows elsewhere. No `math.random`, no per-frame
+-- re-roll: two players watching the same replay must see the same
+-- scatter, and a save/load mid-fade must not reshuffle it either.
+local function corpse(x, y, size, col, seed, fade)
+  local g = love.graphics
+  -- Two cheap, uncorrelated angles and distances off one seed, in the
+  -- same spirit as the item-spot scatter locations already use.
+  local a1 = (seed % 6283) / 1000
+  local a2 = ((seed / 7) % 6283) / 1000
+  local d1 = 0.55 + ((seed % 97) / 97) * 1.45   -- up to 2x size, in units
+  local d2 = 0.55 + ((seed / 13 % 97) / 97) * 1.45
+  local r1 = ((seed % 31) / 31) * 6.28318
+  local r2 = ((seed / 19 % 31) / 31) * 6.28318
+
+  local hx, hy = x + math.cos(a1) * d1 * size, y + math.sin(a1) * d1 * size
+  local gx, gy = x + math.cos(a2) * d2 * size, y + math.sin(a2) * d2 * size
+
+  g.setColor(col[1] * 0.45, col[2] * 0.45, col[3] * 0.45, 0.85 * fade)
+  segment(hx, hy, math.cos(r1), math.sin(r1), size, 0, 0, 0.68, 0.58)
+  g.setColor(col[1] * 0.35, col[2] * 0.35, col[3] * 0.35, 0.85 * fade)
+  segment(gx, gy, math.cos(r2), math.sin(r2), size, 0, 0, 1.15, 0.90)
+end
+M.corpse = corpse
+
 function M.draw(snap, vp)
   local a = snap.agents
   local world = snap.world
@@ -360,6 +396,30 @@ function M.draw(snap, vp)
     end
   end
 
+  -- ── the dead (plan 05) ──
+  --
+  -- A CORPSE PILE IS LIVE INFORMATION, so it obeys fog exactly as a live
+  -- ant does -- drawn only where the ground it lies on is currently
+  -- visible (present or contested), never on a merely-discovered or
+  -- unvisited site. A pile of bodies at an enemy mound would otherwise
+  -- announce a battle to a player who never went there. `c.at` may be
+  -- nil (a death away from any mound, which the current sim does not
+  -- produce, but a corpse should not crash rendering if a future
+  -- change ever does) -- undrawable without a site to test, so it is
+  -- skipped rather than assumed visible.
+  for i = 1, #a.corpses do
+    local c = a.corpses[i]
+    local site = c.at and WW.site(world, c.at)
+    local visible = site and (site.owner == "you" or site.held or site.contested)
+    if visible and c.x >= x0 and c.x <= x1 and c.y >= y0 and c.y <= y1 then
+      local sx, sy = vp.worldToScreen(c.x, c.y)
+      local col = (c.side == "you") and YOUR_COL
+                or SIDE_COL[c.side] or ENEMY_COL
+      local fade = 1 - math.min(1, c.t / AA.cfg.corpseLife)
+      corpse(sx, sy, antSize, col, c.seed, fade)
+    end
+  end
+
   -- ── the ants themselves ──
   for i = 1, a.n do
     local ant = a.pool[i]
@@ -449,7 +509,21 @@ function M.draw(snap, vp)
       -- move and its column must separate from the milling garrison.
       if not ant.at then col = MISSION_COL end
       local gait = (ant.x + ant.y) * 0.05
-      body(sx, sy, ant.dir, antSize, col, gait, detail, fade)
+      local dir = ant.dir
+      -- PLAN 05, 6b: a leg-holder pinning the spider is drawn AT the
+      -- animated leg tip, pincers-closed and gripping inward, instead of
+      -- ambling in the ordinary ring -- so it moves with the leg,
+      -- including any thrashing. Sim position (`ant.x`/`ant.y`) is
+      -- untouched; this reassigns only where the body is DRAWN, the
+      -- same sim-draws-nothing split the corpse scatter and the queen
+      -- crown already follow. Looked up by pool index `i`, which is
+      -- exactly what M.fightSpider stores in `spiderLegs`.
+      local pins = ant.at and locationsMod.spiderLegTips[ant.at]
+      local pin = pins and pins[i]
+      if pin then
+        sx, sy, dir = pin.x, pin.y, pin.dir
+      end
+      body(sx, sy, dir, antSize, col, gait, detail, fade)
 
       -- WHAT IT IS CARRYING, held up over its head.
       --
@@ -517,7 +591,50 @@ function M.draw(snap, vp)
         local hx = sx + ca * lift
         local hy = sy + sa * lift
 
-        if ant.carry >= 4 then
+        if ant.carryQueen then
+          -- A FALLEN QUEEN, carried home (Luis, 2026-08-19: "carry
+          -- queen's body back to hive" / "X's instead of her round eyes
+          -- after she's dead"). She is the biggest single piece of food
+          -- on the board (05-battles.md's own words), so her body reads
+          -- as bigger than any item -- a limp three-segment shape (the
+          -- same construction `body()` draws a live ant or queen with,
+          -- gaster/thorax/head, but static: no legs, no gait, no wing
+          -- flutter) trailing behind the ant's jaws rather than held
+          -- proudly up front, and DEAD EYES: an X of two crossed strokes
+          -- where a live queen's round dot pupils go, the unmistakable
+          -- "she is not alive" tell.
+          local qsz = isz * 1.35
+          local qx = sx - ca * antSize * 0.9
+          local qy = sy - sa * antSize * 0.9
+          local qc, qs = ca, sa
+          local function qseg(off, w, l)
+            local cx2, cy2 = qx + qc * off * qsz, qy + qs * off * qsz
+            local px, py = -qs * w * qsz, qc * w * qsz
+            local fx, fy = qc * l * qsz, qs * l * qsz
+            love.graphics.polygon("fill",
+              cx2 - fx + px, cy2 - fy + py, cx2 + fx + px, cy2 + fy + py,
+              cx2 + fx - px, cy2 + fy - py, cx2 - fx - px, cy2 - fy - py)
+          end
+          love.graphics.setColor(0.42, 0.34, 0.16, 1)
+          qseg(-1.5, 0.62, 0.58)   -- gaster
+          love.graphics.setColor(0.52, 0.42, 0.20, 1)
+          qseg(0.1, 0.42, 0.30)    -- thorax
+          love.graphics.setColor(0.58, 0.48, 0.24, 1)
+          qseg(0.75, 0.34, 0.26)   -- head
+          -- The X eyes, at roughly the head's own eye spots.
+          local hx2 = qx + qc * 0.95 * qsz
+          local hy2 = qy + qs * 0.95 * qsz
+          local ew = qsz * 0.11
+          for side = -1, 1, 2 do
+            local ex = hx2 - qs * side * qsz * 0.18
+            local ey = hy2 + qc * side * qsz * 0.18
+            love.graphics.setColor(0.05, 0.04, 0.04, 0.95)
+            love.graphics.setLineWidth(math.max(1, qsz * 0.05))
+            love.graphics.line(ex - ew, ey - ew, ex + ew, ey + ew)
+            love.graphics.line(ex - ew, ey + ew, ex + ew, ey - ew)
+          end
+          love.graphics.setLineWidth(1)
+        elseif ant.carry >= 4 then
           -- APHID: two overlapping convex ovals plus the wet highlight,
           -- exactly as the patch draws it. Never one waisted outline -- a
           -- concave fill kills the GPU 2D path for the whole run.

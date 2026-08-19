@@ -493,6 +493,20 @@ function M.apply(s, intent)
     end
     return false
 
+  elseif k == "withdraw" then
+    -- PLAN 05, section 6c: pulling the player's engaged ants off a
+    -- spider fight, with a parting-kill cost. A distinct intent from
+    -- "send" because M.withdrawFromSpider's rules (a live spider is
+    -- never "owned", so M.send's ownership gate would refuse this) are
+    -- specific to that one fight -- see the function's own note.
+    if not (intent.from and intent.to) then return false end
+    local n = A.withdrawFromSpider(s.agents, intent.from, intent.to, A.YOU)
+    if n > 0 then
+      s.events[#s.events + 1] = { kind = "withdrawn", n = n, t = s.time }
+      return true
+    end
+    return false
+
   elseif k == "queen" then
     -- TEN ANTS RAISE A QUEEN. The price is fixed, and the moment ants
     -- stop being only an army: you spend bodies to buy production. A
@@ -746,6 +760,14 @@ function M.update(s, dt)
   -- see A.fight. Ordering matters only in that arrivals should join the
   -- fight on the tick they land, which is what running it after update does.
   A.fight(s.agents, dt)
+  -- THE SPIDER (plan 05): a separate subdual fight, same reason it runs
+  -- after A.update -- an ant that just arrived should be able to grab a
+  -- free leg on the tick it lands.
+  A.fightSpider(s, dt)
+  -- AGE THE DEAD. Corpses from either fight above land in a.corpses this
+  -- same tick; ticking after both means a body killed this frame still
+  -- gets its full corpseLife rather than one already spent.
+  A.tickCorpses(s.agents, dt)
 
   -- SWEEP THE DELIVERIES. Ants bank what they carried into an
   -- accumulator on the agent pool rather than reaching up into the sim

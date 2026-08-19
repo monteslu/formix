@@ -343,17 +343,128 @@ M.levels = {
     },
   },
   {
+    id = "gatebattle",
+    name = "Gate: battle",
+    blurb = "Two mounds, in reach, at war from the first tick.",
+    generated = false,
+    -- PLAN 05's mound-combat gate fixture. Two adjacent mounds, no
+    -- queens on either side to complicate the arithmetic -- a garrison
+    -- count is exactly what the gate spends and what it counts. `plain`
+    -- reaches 1150 world units; 700 apart puts them well inside range so
+    -- a send is never refused by geometry.
+    --
+    -- ONE ANT EACH SIDE, on purpose: a drag always sends the WHOLE
+    -- garrison (the fraction control in input/intents.lua only steps
+    -- 25/50/100%, not an exact count), so a controlled 1v1 duel requires
+    -- the source mound to already hold exactly one ant. Gates that need
+    -- a specific facing use the SELECT+LEFT/RIGHT debug op
+    -- (probe.command "faceaway"/"facetoward"); gates that need more
+    -- bodies get their own fixture level rather than widening this one.
+    nodes = {
+      { kind = "plain", x = 0,   y = 0, own = true,  ants = 1, queens = 0 },
+      { kind = "plain", x = 700, y = 0, foe = "red", ants = 1, queens = 0 },
+    },
+  },
+  {
+    id = "gatebattle2",
+    name = "Gate: battle (bulk)",
+    blurb = "Twelve a side, for statistics a 1v1 cannot give.",
+    generated = false,
+    -- The damage-bounds and no-deadlock assertions need enough landed
+    -- hits to see the full 2-4 range and enough ants to prove the two
+    -- sides never lock step; a 1v1 duel (gatebattle) is too small a
+    -- sample and too fragile a window for either.
+    nodes = {
+      { kind = "plain", x = 0,   y = 0, own = true,  ants = 12, queens = 0 },
+      { kind = "plain", x = 700, y = 0, foe = "red", ants = 12, queens = 0 },
+    },
+  },
+  {
     id = "gatespider",
     name = "Gate: spider",
     blurb = "She is bigger than you are.",
     generated = false,
     -- Plenty of workers, no queen to distract the arithmetic, and one
-    -- spider six hits deep holding eight legs.
+    -- spider holding eight legs.
     nodes = {
-      { kind = "plain", x = 0, y = 0, own = true, ants = 20, queens = 1 },
+      { kind = "plain", x = 0, y = 0, own = true, ants = 20, queens = 0 },
     },
     locations = {
       { kind = "spider", x = 700, y = 0 },
+    },
+  },
+  {
+    id = "gatespider2",
+    name = "Gate: spider (withdrawal)",
+    blurb = "A second mound to fall back to.",
+    generated = false,
+    -- PLAN 05, section 6c: `gatespider` has nowhere to withdraw TO. A
+    -- second plain mound sits close enough to be reachable the moment
+    -- the player holds n1, which is from the first tick. 12 ants -- a
+    -- drag always sends the WHOLE garrison (touch's fraction gauge only
+    -- steps 25/50/100%, never an exact count), so an "engage 10" test
+    -- needs its OWN precisely-sized garrison, same discipline gatebattle
+    -- uses; 12 leaves headroom above the 10 the plan's own withdrawal
+    -- assertion (#9) engages.
+    nodes = {
+      { kind = "plain", x = 0,    y = 0, own = true, ants = 12, queens = 0 },
+      { kind = "plain", x = -700, y = 0, own = true, ants = 0,  queens = 0 },
+    },
+    locations = {
+      { kind = "spider", x = 700, y = 0 },
+    },
+  },
+  {
+    id = "gatespiderwin",
+    name = "Gate: spider (committed send)",
+    blurb = "Fifteen in.",
+    generated = false,
+    -- test-spider #2's WIN half: exactly the tuned win-count from cfg
+    -- (section on the spider's arithmetic: "likely 15"), sized as its
+    -- own fixture so a 100%-fraction send moves the precise number the
+    -- assertion needs -- the same reasoning gatebattle documents for why
+    -- a controlled count needs a controlled board rather than a fraction
+    -- of a bigger one.
+    nodes = {
+      { kind = "plain", x = 0, y = 0, own = true, ants = 15, queens = 0 },
+    },
+    locations = {
+      { kind = "spider", x = 700, y = 0 },
+    },
+  },
+  {
+    id = "gatespiderlose",
+    name = "Gate: spider (undercommitted send)",
+    blurb = "Nine in.",
+    generated = false,
+    -- test-spider #2's LOSE half: the tuned lose-count, below the cliff
+    -- (05-battles.md's arithmetic: 9 in leaves one striker, a death
+    -- spiral). Same reasoning as gatespiderwin above.
+    nodes = {
+      { kind = "plain", x = 0, y = 0, own = true, ants = 9, queens = 0 },
+    },
+    locations = {
+      { kind = "spider", x = 700, y = 0 },
+    },
+  },
+  {
+    id = "gatesiege",
+    name = "Gate: siege",
+    blurb = "An undefended queen, ripe for the taking.",
+    generated = false,
+    -- 2026-08-19: gate fixture for the queen-siege close-in and carry-
+    -- home behaviours (Luis: "let them get closer to the queen" /
+    -- "carry queen's body back to hive"). The enemy mound has a queen
+    -- and NO garrison, so M.fight's siege branch (`defenders == 0 and
+    -- attacker`) starts the instant the player's column arrives -- no
+    -- worker-vs-worker fight to wait out first. The player's OWN mound
+    -- has a queen too, so the carried-home body has somewhere to bank --
+    -- without one the ant would hold her forever ("nowhere to take it"
+    -- is a real, working fallback, not a bug, but it means delivery
+    -- itself is untestable on a queenless board).
+    nodes = {
+      { kind = "plain", x = 0,   y = 0, own = true,  ants = 12, queens = 1 },
+      { kind = "plain", x = 700, y = 0, foe = "red", ants = 0,  queens = 1 },
     },
   },
   {

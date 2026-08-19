@@ -16,7 +16,16 @@ local M = {}
 --    are now, never where you have been. A location also carries the item
 --    count as it looked when you last stood on it, because a discovered
 --    patch draws from memory rather than from the live number.
-M.VERSION = 5
+-- 6: plan 05. Corpses (a battle's dead bodies must not reset to nothing
+--    on a reload mid-fade) and each spider's subdual state (hp, which
+--    legs are held, her kill clock) -- see the "S" line below. Field 6
+--    of the "L" line changes MEANING for a spider from this version on:
+--    it was `guard` (a countdown of arrivals left to trade), it is now
+--    her hit points (damageable only while subdued). A pre-v6 save
+--    cannot be reinterpreted -- the field is the same column but a
+--    different unit -- so the version bump refuses it outright rather
+--    than loading a spider with the wrong kind of number in her hp.
+M.VERSION = 6
 M.FILE = "colony"
 
 local function n2(v) return string.format("%.2f", v) end
@@ -83,6 +92,19 @@ function M.serialize(s)
         (n.owner and n.owner ~= "you") and n.owner or "-",
         n.visited and 1 or 0)
   end
+
+  -- ── THE DEAD (plan 05, v6) ────────────────────────────────────────────
+  --
+  -- A body mid-fade must not silently reset to fully-opaque (or vanish
+  -- early) across a save/load -- `t` is the fact that makes the fade
+  -- continuous rather than restarting. `seed` travels too: the renderer
+  -- must draw the SAME scatter after a reload, never re-roll it, or a
+  -- save/load in the middle of a battle would visibly shuffle every
+  -- corpse on the ground.
+  for i = 1, #s.agents.corpses do
+    local c = s.agents.corpses[i]
+    put("C", n2(c.x), n2(c.y), c.side, n2(c.t), c.seed, c.at or "-")
+  end
   return table.concat(out, "\n")
 end
 
@@ -93,6 +115,9 @@ function M.deserialize(s, text)
 
   -- Clear whatever sim.new spawned; the blob says where everyone lives.
   while s.agents.n > 0 do A.kill(s.agents, s.agents.n) end
+  -- Same for corpses (plan 05): a fresh sim starts with none, and the
+  -- blob is authoritative on what is currently fading.
+  s.agents.corpses = {}
 
   for line in text:gmatch("([^\n]+)") do
     local f = {}
@@ -175,6 +200,18 @@ function M.deserialize(s, text)
         end
         restored = restored + 1
       end
+    elseif k == "C" then
+      -- x y side t seed at. `at` restores as-is even though its mound may
+      -- no longer be mixed by the time the game resumes -- a corpse does
+      -- not depend on the fight that produced it still being live, only
+      -- on its own fade clock.
+      local at = f[7]
+      s.agents.corpses[#s.agents.corpses + 1] = {
+        x = tonumber(f[2]) or 0, y = tonumber(f[3]) or 0,
+        side = f[4], t = tonumber(f[5]) or 0,
+        seed = tonumber(f[6]) or 0,
+        at = (at and at ~= "-") and at or nil,
+      }
     end
   end
 

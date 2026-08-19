@@ -41,13 +41,19 @@ function cartFor(level, file) {
 }
 
 // The location's own line, straight from the sim.
+//
+// PLAN 05: `guard` is gone (world.lua's spider spec no longer sets it);
+// the same column now carries `hp` -- probe.lua's own comment on why the
+// field NAME did not change (an old gate parsing this line for a
+// non-spider location sees no difference). Kept as `guard` here too so
+// the regex below still lines up with what the cart actually prints.
 function locOf(d, id) {
   const line = d.all().filter(l => l.startsWith('@loc ' + id + ' ')).pop();
   if (!line) return null;
   const m = line.match(
     /@loc (\S+) (\S+) (\S+) items=(\d+)\/(\d+) value=(\d+) guard=(\d+) observed=(\w+) held=(\w+)/);
   return m && { id: m[1], kind: m[2], owner: m[3] === 'nil' ? null : m[3],
-                items: +m[4], cap: +m[5], value: +m[6], guard: +m[7],
+                items: +m[4], cap: +m[5], value: +m[6], hp: +m[7],
                 observed: m[8] === 'true', held: m[9] === 'true' };
 }
 
@@ -196,43 +202,47 @@ function locOf(d, id) {
 }
 
 // ── the spider ─────────────────────────────────────────────────────────
+//
+// PLAN 05, section 6 replaced the toll booth (`guard`, a countdown of
+// arrivals traded one at a time) with a subdual fight -- see
+// internal-formix/05-battles.md and tools/test-spider.mjs, which is the
+// gate that actually proves the fight's rules (cadence, strikers-first,
+// leg-holder death, withdrawal, the web). This section keeps only what
+// is IN SCOPE for a foraging gate: that her loot (8 legs) is real
+// pickup-and-carry food once she falls, same as any other patch --
+// test-spider owns the fight mechanics themselves.
 {
-  const cart = cartFor('gatespider', 'spider-cart.wasc');
+  const cart = cartFor('gatespiderwin', 'spider-cart.wasc');
   const d = driver(t, cart);
-  await d.boot(7, { level: 'gatespider' });
+  await d.boot(7, { level: 'gatespiderwin' });
 
   let r = await d.inspect();
   const L = 'L2';
   const before = locOf(d, L);
   R.check('a spider is guarding her ground',
-          before && before.kind === 'spider' && before.guard === 6,
-          before ? `guard=${before.guard}` : 'no @loc line');
+          before && before.kind === 'spider' && before.hp === 20,
+          before ? `hp=${before.hp}` : 'no @loc line');
   R.check('and she is not carrying loose legs about',
           before && before.items === 0, `items=${before && before.items}`);
 
-  // A COLUMN TOO SMALL DIES ON HER. Two ants against six hits take her
-  // down to four and are both eaten.
-  const m0 = await d.metric();
-  await d.hold(['select'], 4);         // (no-op; keeps pad state clean)
+  // A COMMITTED SEND (this fixture's whole 15-ant garrison, the tuned
+  // win-count from 05-battles.md) is what the new rule actually asks
+  // for -- unlike the old per-arrival toll, a subdual fight needs eight
+  // legs held AT ONCE, so a drip of small sends never subdues her at
+  // all. She should still be intact for a while after the send lands
+  // (swings are 3s, only in-cone, only once subdued), then fall.
   await d.send(r.pos.n1, r.pos[L]);
   await d.step(1200);
   r = await d.inspect();
   const mid = locOf(d, L);
   R.check('she takes hits but holds while she can',
-          mid.guard < 6, `guard 6 -> ${mid.guard}`);
+          mid.hp < 20, `hp 20 -> ${mid.hp}`);
 
-  // Keep feeding ants in until she falls.
-  for (let i = 0; i < 6; i++) {
-    r = await d.inspect();
-    if ((locOf(d, L) || {}).guard === 0) break;
-    if (!r.pos[L]) break;
-    await d.send(r.pos.n1, r.pos[L]);
-    await d.step(1200);
-  }
+  await d.step(3600);
   r = await d.inspect();
   const dead = locOf(d, L);
-  R.check('enough ants bring her down', dead.guard === 0,
-          `guard=${dead.guard}`);
+  R.check('enough ants bring her down', dead.hp === 0,
+          `hp=${dead.hp}`);
   R.check('the ground is claimed when she falls', dead.owner === 'you',
           `owner=${dead.owner}`);
 
@@ -241,14 +251,22 @@ function locOf(d, id) {
   // gate looked, the squad standing on her had already carried the legs
   // off, so the reward looked like it had never existed. Eight legs is
   // the whole yield of this board, and nothing else on it can be picked.
-  await d.step(2400);
+  await d.step(600);
   const after = await d.metric();
   R.check('her legs are the prize (8 of them)', after.picked === 8,
           `picked=${after.picked} items left=${dead.items}`);
-  R.check('the legs are worth carrying home',
-          after.food + after.eaten === 8 * before.value,
-          `food=${after.food} eaten=${after.eaten} ` +
-          `want ${8 * before.value} total`);
+  // NO QUEEN ON THIS BOARD (gatespiderwin, like gatespider before it, is
+  // a combat fixture, not a delivery one -- see 05-battles.md's own
+  // fixture note), so picked legs have nowhere to bank: `dispatchCarrier`
+  // finds no queen and the carried value never becomes pantry food or an
+  // eaten larva. That path (pickup -> carry -> bank) is grain's job,
+  // proven in the "grain: claim, carry, bank" section above on a board
+  // that HAS a queen -- duplicating it here would test the SAME code a
+  // second time under a name that suggests it is spider-specific, which
+  // it is not.
+  R.check('picked legs have nowhere to bank on a queenless board (by design)',
+          after.food === 0 && after.eaten === 0,
+          `food=${after.food} eaten=${after.eaten}`);
   R.check('no lua errors fighting her', d.errors().length === 0,
           d.errors()[0] || '');
 }

@@ -59,12 +59,15 @@ local COOLDOWN = {
   season = 0.0,
   threat = 1.5,
   deliver = 0.22,
-  -- EVERY ANT SWINGS ONCE A SECOND and half of those land, so a
-  -- twenty-a-side battle generates ~20 hits a second. Unlimited, that is
-  -- white noise; one clank per 70ms is dense enough to read as a scrap and
-  -- sparse enough to stay a sound. The DROP-don't-queue rule above is what
-  -- keeps a finished battle from clattering on afterwards.
-  clank = 0.07,
+  -- PLAN 05 SLOWED COMBAT TO ONE SWING PER 3s (was 1s), so the hit RATE
+  -- this limiter was shaped for no longer happens: a 40-ant battle is
+  -- now ~40 * (1/3) * 0.5 =~ 7 hits/s =~ one per 140ms, well under the
+  -- old 70ms floor on its own. Lowered to 30ms -- a polyphony guard
+  -- against a pathological ant count rather than the thing doing the
+  -- shaping -- so "every hit clangs" holds for any battle a player is
+  -- actually looking at, and only a battle far larger than anything the
+  -- game currently produces would ever hit the limiter at all.
+  clank = 0.03,
 }
 local lastPlayed = {}
 
@@ -247,7 +250,16 @@ function M.update(snap, dt)
   --
   -- The counter only ever grows, so a level change resets it below rather
   -- than firing a burst for a battle on a map that no longer exists.
-  local hits = snap.hits or 0
+  -- BUG FOUND LIVE, 2026-08-19: this read `snap.hits`, but `snap` is the
+  -- whole sim state (`S`) and the swing counter lives on `S.agents.hits`
+  -- (agents.lua's M.fight/M.fightSpider both write `a.hits`, never
+  -- `s.hits`) -- so `hits` was permanently 0, `hits > lastHits` never
+  -- fired, and no clank ever played, in any real playthrough, silently,
+  -- since whenever this branch was written. Every automated gate that
+  -- exercises combat reads `a.hits` STRAIGHT off the sim (probe.lua's
+  -- own `@m` line), never through this function, which is exactly why
+  -- 25+ passing battle-gate assertions never caught it.
+  local hits = (snap.agents and snap.agents.hits) or 0
   if hits < lastHits then
     lastHits = hits            -- new world; do not replay the old one's war
   elseif hits > lastHits then
@@ -303,6 +315,23 @@ function M.update(snap, dt)
         if ant.side ~= "you" and ant.at then
           local site = w.node and w.node[ant.at]
           if site and site.owner == "you" then hostile = true; break end
+        end
+      end
+    end
+    if not hostile and w.locs then
+      -- PLAN 05, section 7: a spider fight IS a war (the plan's own
+      -- words: "a spider fight counts as war -- the skirmish track
+      -- plays"). Any spider location with engaged ants and hp > 0,
+      -- visible per fog exactly like the two branches above -- the
+      -- music is the player's ears, it must not reveal a fight on
+      -- unobserved ground. `contested` is what M.fightSpider sets while
+      -- ants are engaged with her, the same signal a mound assault uses.
+      for i = 1, #w.locs do
+        local l = w.locs[i]
+        if l.kind == "spider" and (l.hp or 0) > 0 and l.contested
+           and l.observed then
+          hostile = true
+          break
         end
       end
     end

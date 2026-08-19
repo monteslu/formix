@@ -239,16 +239,68 @@ local function drawGrain(g, sx, sy, r, l, t, shown, here, q)
   end
 end
 
+-- ── the web ────────────────────────────────────────────────────────────
+-- Plan 05, section 6d: the ground remembers what lived there. Visible
+-- from DISCOVERY onward (state 2, the desaturated palette that grain
+-- stubble already uses) and STAYS after she is dead -- it needs no save
+-- state of its own because `visited` already persists. Deterministic
+-- off the location's own seed, sized beyond her radius so it reads as
+-- terrain under her rather than as part of her body.
+local function drawWeb(g, sx, sy, r, seed, dim)
+  local a1 = 0.55
+  g.setColor(0.72, 0.74, 0.70, (dim and 0.14 or 0.22) * a1)
+  g.setLineWidth(1)
+  local spokes = 7
+  local rings = 3
+  local pts = {}
+  for k = 1, spokes do
+    local ang = seeded(seed + k * 131)() * 0.3 + (k / spokes) * 6.28318
+    pts[k] = ang
+    g.line(sx, sy, sx + math.cos(ang) * r * 1.55, sy + math.sin(ang) * r * 1.55)
+  end
+  for ring = 1, rings do
+    local rr = r * (0.55 + ring * 0.33)
+    local prevx, prevy
+    for k = 1, spokes + 1 do
+      local ang = pts[((k - 1) % spokes) + 1]
+      local x, y = sx + math.cos(ang) * rr, sy + math.sin(ang) * rr
+      if prevx then g.line(prevx, prevy, x, y) end
+      prevx, prevy = x, y
+    end
+  end
+end
+M.drawWeb = drawWeb
+
 -- ── the spider ─────────────────────────────────────────────────────────
 -- Big, legged, and unmistakable the moment you can see her. Built from
--- overlapping convex ovals like the ants, for the same reason. Her legs
--- go as she is beaten down, so a wounded spider reads as wounded.
--- `here` is whether one of your ants is standing in the patch. SHE is
--- only drawn when it is true: a spider is a GUARD, and a guard is the
--- half of a location that hides. Her legs, once she is beaten, are food
--- and follow the food rule instead (always visible once discovered).
+-- overlapping convex ovals like the ants, for the same reason.
+--
+-- PLAN 05 rewrite: she is a subdual fight now, not a toll (`l.guard` is
+-- gone -- see world.lua's note). `l.hp` and `l.spiderLegs` are what the
+-- sim tracks; ALL 8 legs stay on her until hp <= 0 (ruling 4: "she never
+-- dies of anything but hp = 0"), so damage no longer removes legs --
+-- wounded reads as thrashing-under-swarm instead, driven by how many of
+-- her legs are currently held.
+--
+-- `here` is whether one of your ants is standing in the patch -- unchanged
+-- from before, and still the gate on drawing her AT ALL while alive: a
+-- spider you have merely discovered is a known place, not a live view of
+-- her body (see the early-return note below).
+--
+-- Returns the number of attached (leg-holding) ants, for the caller to
+-- use when deciding whether to draw them pinned instead of milling.
+-- Screen-space leg-tip positions for the CURRENT frame, published per
+-- location id so render/ants.lua can draw a pinned ant riding its leg
+-- instead of milling in the ordinary ring. Rebuilt every M.draw call
+-- (this module's draw runs before ants.lua's in the frame -- see
+-- render/init.lua's draw order), read-only from the other side. Sim
+-- position is untouched (M.fightSpider only ever sets `ant.at`); this
+-- is presentation exactly like the corpse scatter is presentation.
+M.spiderLegTips = {}
+
 local function drawSpider(g, sx, sy, r, l, t, shown, here)
-  local alive = (l.guard or 0) > 0
+  local alive = (l.hp or 0) > 0
+  M.spiderLegTips[l.id] = nil
   if alive and not here then
     -- DISCOVERED, SHE IS IN THERE, AND YOU CANNOT SEE HER.
     --
@@ -261,14 +313,31 @@ local function drawSpider(g, sx, sy, r, l, t, shown, here)
     -- Nothing is drawn here on purpose: the empty-patch stubble above
     -- has already marked the ground as a known place, which is exactly
     -- the right amount to say.
-    return
+    return 0
+  end
+  local attached = 0
+  if l.spiderLegs then
+    for leg = 1, 8 do
+      if l.spiderLegs[leg] then attached = attached + 1 end
+    end
   end
   if alive then
     local legs = 8
-    local hurt = 1 - (l.guard / math.max(1, l.guardMax or l.guard))
+    -- 0-3 attached: the old calm sway, slightly deepened. 4+: erratic --
+    -- amplitude and frequency step up and each leg's phase decorrelates
+    -- from the others (off the location's own seed) so the legs stop
+    -- moving as one body and read as a swarmed animal struggling, not a
+    -- machine idling faster. The 4-ant threshold is a render read of the
+    -- sim's leg table; nothing new in the sim (plan 05, section 6b).
+    local swarmed = attached >= 4
     for k = 1, legs do
-      local a = (k / legs) * 6.28318 + math.sin(t * 0.7 + k) * 0.06
-      local len = r * (0.95 + math.sin(t * 1.6 + k * 2.1) * 0.05)
+      local jphase = swarmed and (seeded(l.seed + k * 251)() * 6.28318) or 0
+      local freqMul = swarmed and (1.8 + seeded(l.seed + k * 97)() * 0.9) or 1
+      local ampMul = swarmed and 2.6 or 1
+      local a = (k / legs) * 6.28318
+                + math.sin(t * 0.7 * freqMul + k + jphase) * 0.06 * ampMul
+      local len = r * (0.95 + math.sin(t * 1.6 * freqMul + k * 2.1 + jphase)
+                              * 0.05 * ampMul)
       local w = math.max(1, r * 0.055)
       local nx, ny = math.cos(a), math.sin(a)
       local px, py = -ny * w, nx * w
@@ -280,6 +349,20 @@ local function drawSpider(g, sx, sy, r, l, t, shown, here)
       g.polygon("fill", kx + px, ky + py, kx - px, ky - py,
                         sx + nx * len - px, sy + ny * len - py,
                         sx + nx * len + px, sy + ny * len + py)
+      -- 6b: a pinned ant rides at the animated tip, gripping inward, so
+      -- it moves with the leg including any thrashing. Published for
+      -- render/ants.lua to consume; the holder's id is the key so an ant
+      -- that lets go (dies or withdraws) simply stops appearing here.
+      local holder = l.spiderLegs and l.spiderLegs[k]
+      if holder then
+        local tipx, tipy = sx + nx * len, sy + ny * len
+        M.spiderLegTips[l.id] = M.spiderLegTips[l.id] or {}
+        M.spiderLegTips[l.id][holder] = {
+          x = tipx, y = tipy,
+          -- Facing INWARD (toward the body), pincers-closed orientation.
+          dir = math.atan2(sy - tipy, sx - tipx),
+        }
+      end
     end
     -- Abdomen and head.
     g.setColor(0.20, 0.15, 0.17, 1)
@@ -290,13 +373,19 @@ local function drawSpider(g, sx, sy, r, l, t, shown, here)
     g.setColor(0.92, 0.86, 0.40, 0.9)
     disc(sx - r * 0.38, sy - r * 0.10, r * 0.06)
     disc(sx - r * 0.38, sy + r * 0.10, r * 0.06)
-    -- Damage: she pales as she is worn down.
+    -- Damage: she pales as she is worn down. hp only drops while
+    -- subdued, so this stays flat during an undercommitted grind and
+    -- only moves once a send actually pins all eight legs.
+    local hurt = 1 - (l.hp / math.max(1, l.spiderHpMax or l.hp))
     if hurt > 0 then
       g.setColor(0.55, 0.20, 0.18, hurt * 0.35)
       disc(sx + r * 0.22, sy, r * 0.46)
     end
   else
-    -- Beaten: the legs are lying about, and each one is a meal.
+    -- Beaten: her husk and legs-on-the-ground art. This is her DEATH
+    -- state only now (plan 05: legs no longer vanish with damage while
+    -- she lives), and the loot itself follows the ordinary food rule
+    -- (always visible once discovered).
     for k = 1, shown do
       local ox, oy = itemSpot(l.seed, k)
       local x, y = sx + ox * r, sy + oy * r
@@ -314,6 +403,7 @@ local function drawSpider(g, sx, sy, r, l, t, shown, here)
     g.setColor(0.15, 0.12, 0.13, 0.55)
     disc(sx, sy, r * 0.34)
   end
+  return attached
 end
 
 function M.draw(snap, vp)
@@ -412,7 +502,7 @@ function M.draw(snap, vp)
       -- the patch she is hidden (see drawSpider), and there the stubble
       -- is the one mark saying "you have been here", which is the whole
       -- point of it.
-      local guardShown = (l.guard or 0) > 0 and l.observed
+      local guardShown = (l.hp or 0) > 0 and l.observed
       local ringA = (shown > 0 or guardShown) and 0.0
                     or (l.observed and 0.42 or 0.32)
       if ringA > 0 then
@@ -445,6 +535,11 @@ function M.draw(snap, vp)
         local q = drawField(g, sx, sy, r, l, l.observed)
         drawGrain(g, sx, sy, r, l, t, shown, l.observed, q)
       elseif l.kind == "spider" then
+        -- The web (6d) goes down FIRST, under her and under her husk
+        -- alike, and OUTSIDE her radius so it reads as terrain rather
+        -- than body. `l.observed` picks full colour (present) vs the
+        -- desaturated discovered dim, same rule grain stubble uses.
+        drawWeb(g, sx, sy, r, l.seed, not l.observed)
         drawSpider(g, sx, sy, r, l, t, shown, l.observed)
       end
       end

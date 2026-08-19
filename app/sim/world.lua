@@ -96,8 +96,16 @@ local LKINDS = {
   -- Not a harvest -- a fight. Beat her and the legs are the prize. The
   -- biggest of the three, and deliberately: she should look like trouble
   -- the moment the fog lifts off her.
+  --
+  -- PLAN 05: no longer a toll (`guard`, a countdown of arrivals traded
+  -- for her life one at a time). She is a subdual fight: 8 legs, 20 hp,
+  -- damageable only while every leg is held. `guard` is READ NOWHERE any
+  -- more (M.fightSpider owns her state), kept in the spec only because
+  -- save v5 blobs still carry that field name in the same column -- see
+  -- save.lua's version note on why that makes a v5 blob unloadable
+  -- rather than reinterpretable.
   spider = { radius = 96, range = 900, items = 0, cap = 8, value = 3,
-             guard = 6, spoils = 8 },
+             spoils = 8, hp = 20, legs = 8, killPeriod = 6.0 },
 }
 M.LKINDS = LKINDS
 
@@ -133,12 +141,20 @@ function M.addLoc(w, kind, x, y, opts)
     value = opts.value or spec.value or 1,
     regrow = opts.regrow or spec.regrow,   -- nil = never comes back
     regrowT = 0,
-    -- A guarded place must be beaten before it can be claimed. The
-    -- spider is six defenders wearing one body: each attacker that
-    -- reaches her trades itself for one hit, exactly as an ant trades
-    -- itself for a defender on a mound.
-    guard = opts.guard or spec.guard or 0,
     spoils = opts.spoils or spec.spoils or 0,
+    -- SPIDER STATE (plan 05). `hp`/`legs`/`spiderLegs`/`killT` are
+    -- meaningless for anything but a spider location and cost nothing
+    -- for grain or aphids to carry -- `M.fightSpider` only ever looks at
+    -- them where `kind == "spider"`.
+    --
+    -- `legs` is the LEG COUNT (8, fixed by cfg.spiderLegs), used to size
+    -- `spiderLegs`. `spiderLegs` is the actual per-leg assignment table,
+    -- {[1..8] -> ant id or nil}: which specific ant, if any, holds each
+    -- leg. Not built from `opts`/`spec` directly (a location spec is not
+    -- the place to construct a per-instance table), just sized here.
+    hp = (kind == "spider") and (opts.hp or spec.hp) or nil,
+    spiderLegs = (kind == "spider") and {} or nil,
+    killT = (kind == "spider") and (opts.killPeriod or spec.killPeriod or 6.0) or nil,
     -- See the note on LKINDS: false for everything that exists today.
     relay = opts.relay or spec.relay or false,
     scouts = opts.scouts or spec.scouts or false,

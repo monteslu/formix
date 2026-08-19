@@ -103,6 +103,15 @@ export function driver(t, cartPath) {
       await d.drag(from[0], from[1], to[0], to[1]);
       return drain();
     },
+    // PLAN 05, 6c: the GESTURE is identical to a send -- drag from source
+    // to target -- the sim itself decides "send" vs "withdraw" by whether
+    // the source is a live spider fight (see input/intents.lua's note).
+    // Named separately here only so a gate reads "withdraw" where it
+    // means withdrawal, not because the wire protocol differs.
+    async withdraw(from, to) {
+      await d.drag(from[0], from[1], to[0], to[1]);
+      return drain();
+    },
     async drag(x0, y0, x1, y1, steps = 5) {
       await t('input', { op: 'pointer', x: x0, y: y0, left: true, active: true });
       await t('frame', { op: 'step', frames: 6 });
@@ -124,23 +133,45 @@ export function driver(t, cartPath) {
       await t('input', { op: 'press', button: 'select', frames: 6 });
       await t('frame', { op: 'step', frames: 20 });
       await drain();
-      const pos = {}, mound = {}, loc = {};
+      const pos = {}, mound = {}, loc = {}, corpses = [], spider = {};
       for (const l of lines) {
         let m = l.match(/^@node (\w+) (-?\d+) (-?\d+)/);
         if (m) pos[m[1]] = [ +m[2], +m[3] ];
+        m = l.match(/^@corpse (\d+) (-?\d+) (-?\d+)/);
+        if (m) corpses[+m[1] - 1] = [ +m[2], +m[3] ];
+        // PLAN 05's own line: her hp, kill clock and how many of the 8
+        // legs are held right now -- everything M.fightSpider decides
+        // that the generic `@loc` line (below) does not carry, since
+        // leg occupancy is per-instance state rather than a location
+        // field.
+        m = l.match(/^@spider (\S+) hp=(-?\d+) killT=(-?[\d.]+) held=(\d+) subdued=(\w+)/);
+        if (m) spider[m[1]] = { hp: +m[2], killT: +m[3], held: +m[4],
+                                subdued: m[5] === 'true' };
         // `fg` (the HOLDER's garrison) is optional so this still parses a
         // cart built before it existed -- a gate that silently matched
         // nothing would report every mound as missing rather than fail.
         // `held` and `obs` are optional for the same reason `fg` is: an
         // older cart does not print them, and a gate that silently
         // matched nothing would report every mound as missing.
-        m = l.match(/^@mound (\w+) (\S+) g=(\d+) gi=(\d+) (?:fg=(\d+) )?q=(\d+)\/(\d+) energy=(\d+) reach=(\d+) seen=(\w+) brood=(\d+)(?: held=(\w+))?(?: obs=(\w+))?(?: contested=(\w+))?(?: visited=(\w+))?/);
+        // spinYou/spinFoe (plan 05): the battle-spin sign M.fight assigned
+        // each side while a mound is mixed, 0 when no battle is running.
+        // Optional for the same reason `fg`/`held`/etc are: an older cart
+        // does not print them.
+        // qhp/corpses/corpseValue (2026-08-19): her hp mid-siege and
+        // whether a fallen body is still waiting to be carried home.
+        // Optional for the same older-cart-compatibility reason.
+        m = l.match(/^@mound (\w+) (\S+) g=(\d+) gi=(\d+) (?:fg=(\d+) )?q=(\d+)\/(\d+) energy=(\d+) reach=(\d+) seen=(\w+) brood=(\d+)(?: held=(\w+))?(?: obs=(\w+))?(?: contested=(\w+))?(?: visited=(\w+))?(?: spinYou=(-?\d+))?(?: spinFoe=(-?\d+))?(?: qhp=(-?\d+))?(?: corpses=(\d+))?(?: corpseValue=(\d+))?/);
         if (m) mound[m[1]] = { owner: m[2] === 'nil' ? null : m[2], g: +m[3], gi: +m[4],
                                fg: m[5] === undefined ? +m[3] : +m[5],
                                queens: +m[6], maxQueens: +m[7], energy: +m[8],
                                reach: +m[9], seen: m[10] === 'true', brood: +m[11],
                                held: m[12] === 'true', observed: m[13] === 'true',
-                               contested: m[14] === 'true', visited: m[15] === 'true' };
+                               contested: m[14] === 'true', visited: m[15] === 'true',
+                               spinYou: m[16] === undefined ? 0 : +m[16],
+                               spinFoe: m[17] === undefined ? 0 : +m[17],
+                               qhp: m[18] === undefined ? -1 : +m[18],
+                               corpses: m[19] === undefined ? 0 : +m[19],
+                               corpseValue: m[20] === undefined ? 0 : +m[20] };
         // LOCATIONS TOO, and the fog gate needs them: `visited` and
         // `lastSeenItems` are the two fields that say what the player has
         // LEARNED about a patch, as opposed to what is in it now, and
@@ -149,14 +180,15 @@ export function driver(t, cartPath) {
         // optional for the same reason the mound line's are: an older
         // cart does not print them, and a regex that silently matched
         // nothing would report every location as missing.
-        m = l.match(/^@loc (\S+) (\S+) (\S+) items=(\d+)\/(\d+) value=(\d+) guard=(\d+) observed=(\w+) held=(\w+)(?: visited=(\w+))?(?: lastseen=(-?\d+))?(?: homedist=(-?\d+))?(?: homereach=(-?\d+))?/);
+        m = l.match(/^@loc (\S+) (\S+) (\S+) items=(\d+)\/(\d+) value=(\d+) guard=(\d+) observed=(\w+) held=(\w+)(?: visited=(\w+))?(?: lastseen=(-?\d+))?(?: homedist=(-?\d+))?(?: homereach=(-?\d+))?(?: contested=(\w+))?/);
         if (m) loc[m[1]] = { kind: m[2], owner: m[3] === 'nil' ? null : m[3],
                              items: +m[4], cap: +m[5], value: +m[6], guard: +m[7],
                              observed: m[8] === 'true', held: m[9] === 'true',
                              visited: m[10] === 'true',
                              lastSeen: m[11] === undefined ? -1 : +m[11],
                              homedist: m[12] === undefined ? -1 : +m[12],
-                             homereach: m[13] === undefined ? -1 : +m[13] };
+                             homereach: m[13] === undefined ? -1 : +m[13],
+                             contested: m[14] === undefined ? false : m[14] === 'true' };
       }
       // The camera, for the pan/zoom gate. Parsed from the same overlay
       // dump: there is no pixel that says "the view moved 300 units".
@@ -177,7 +209,7 @@ export function driver(t, cartPath) {
                       cursor: m[3] === 'nil' ? null : m[3],
                       selected: m[4] === 'nil' ? null : m[4], frac: +m[5] };
       }
-      return { pos, mound, loc, cam, ui };
+      return { pos, mound, loc, cam, ui, corpses, spider };
     },
     async metric() {
       await t('frame', { op: 'step', frames: 32 });
