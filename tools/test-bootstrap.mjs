@@ -18,7 +18,7 @@
 // buys the queen, and leaves nobody to feed her. The colony then sits at
 // zero food with a queen who will never lay, which is a dead board that
 // took ten minutes of play to discover.
-import { api, driver, makeReport } from './drive.mjs';
+import { api, driver, makeReport, releaseAll } from './drive.mjs';
 import { execSync } from 'child_process';
 import { writeFileSync, unlinkSync, existsSync, copyFileSync } from 'fs';
 
@@ -124,4 +124,5 @@ for (const level of LEVELS) {
 // Restore the ordinary cart so the next gate does not boot a gate board.
 execSync('./build.sh', { stdio: 'ignore' });
 
+await releaseAll();   // hand the emulator hosts back before exiting
 process.exit(R.done() ? 0 : 1);

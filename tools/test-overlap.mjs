@@ -21,7 +21,7 @@
 // emulator, so this runs even when the server is down, which is when a
 // level-design mistake is most likely to be made.
 import { readFileSync } from 'fs';
-import { makeReport } from './drive.mjs';
+import { makeReport, releaseAll } from './drive.mjs';
 const R = makeReport();
 
 const src = readFileSync('app/sim/campaign.lua', 'utf8');
@@ -85,4 +85,5 @@ for (const lv of levels) {
           overlaps.join('; ') || 'clear');
 }
 
+await releaseAll();   // hand the emulator hosts back before exiting
 process.exit(R.done() ? 0 : 1);

@@ -19,7 +19,7 @@
 // leaks, the far mound becomes reachable or observed the moment the grain
 // is taken. Written to FAIL: let path() relay through a location and rule
 // 1 goes red; let a location scout its neighbours and rule 2 goes red.
-import { api, driver, makeReport } from './drive.mjs';
+import { api, driver, makeReport, releaseAll } from './drive.mjs';
 import { execSync } from 'child_process';
 import { writeFileSync, unlinkSync, existsSync, copyFileSync } from 'fs';
 
@@ -84,4 +84,5 @@ R.check('the grain itself was reachable and harvested',
 R.check('no lua errors', d.errors().length === 0, d.errors()[0] || '');
 
 execSync('./build.sh', { stdio: 'ignore' });
+await releaseAll();   // hand the emulator hosts back before exiting
 process.exit(R.done() ? 0 : 1);

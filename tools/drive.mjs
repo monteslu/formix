@@ -9,7 +9,23 @@ import { existsSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
+// EVERY SESSION THIS PROCESS OPENED, so it can hand the hosts back when
+// the gate exits. A gate script is one process per suite; registering here
+// means a gate does not have to remember to release anything, which is the
+// only version of this that survives someone adding a sixteenth session to
+// test-spider.
+const _sessions = new Set();
+let _releaseHooked = false;
+
 export function api(session) {
+  _sessions.add(session);
+  if (!_releaseHooked) {
+    _releaseHooked = true;
+    // BACKSTOP ONLY. A gate that ends with `process.exit()` -- which is all
+    // of them -- never reaches `beforeExit`, so this catches the case where
+    // a gate throws or returns without calling `releaseAll()`.
+    process.on('beforeExit', () => { void releaseAll(); });
+  }
   // RETRY ON TRANSPORT FAILURE ONLY. The server drops a connection now and
   // then when suites run back to back (ECONNRESET); that is a harness
   // problem and must not be reported as a game failure. A tool-level
@@ -37,7 +53,57 @@ export function api(session) {
     }
     throw lastErr;
   };
+  // RELEASE THE HOST WHEN A GATE SECTION IS DONE.
+  //
+  // Every `api(name)` call opens a SESSION on the shared server, and each
+  // session that loads a cart holds a live emulator host until the server
+  // evicts it (~10 min idle) or hits `maxHosts`. A suite section per
+  // session is the right isolation -- test-spider alone opens six -- but
+  // nothing ever handed them back, so a full run left dozens of hosts
+  // parked, each holding its own GL objects. That is the harness half of
+  // the memory story the server-side GTT instrument exposed (romdev
+  // 0.123.0, wasmcart 0.23.0 "a destroyed cart deletes every GL object it
+  // created"): the engine now frees what a destroyed cart allocated, but
+  // only for carts that actually get destroyed.
+  //
+  // Deliberately BEST-EFFORT and never throwing: releasing is cleanup, and
+  // a cleanup failure must not turn a green gate red or mask the real
+  // assertion that ran before it.
+  call.release = async () => {
+    try { await fetch(`${U}/tool/host`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-romdev-session': session },
+      body: JSON.stringify({ op: 'shutdown' }),
+    }); } catch { /* cleanup only */ }
+  };
   return call;
+}
+
+/** Hand every host this process opened back to the server.
+ *
+ * MUST BE AWAITED BEFORE `process.exit()`. Gates end with
+ * `process.exit(R.done() ? 0 : 1)`, and `exit` runs no async cleanup and
+ * does not fire `beforeExit` -- so a fire-and-forget release loses the
+ * race with the process dying and the hosts stay parked anyway.
+ *
+ * Why this exists: every `api(name)` opens a session, and a session that
+ * loaded a cart holds an emulator host (and its GL objects) until the
+ * server evicts it ~10 minutes later. test-spider alone opens FIFTEEN;
+ * the suite opens roughly sixty. Nothing released them, so a full run
+ * parked dozens of hosts at once and the server sat near its 10-host cap
+ * for the whole run, evicting live work to make room.
+ *
+ * Best-effort by design: cleanup must never turn a green gate red.
+ */
+export async function releaseAll() {
+  const all = [..._sessions];
+  _sessions.clear();
+  await Promise.allSettled(all.map(sess =>
+    fetch(`${U}/tool/host`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-romdev-session': sess },
+      body: JSON.stringify({ op: 'shutdown' }),
+    }).catch(() => {})));
 }
 
 // A 4096-byte run of zeros -- the cart's whole save region, empty.

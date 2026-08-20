@@ -13,7 +13,7 @@
 // has a control that must diverge, or was run against a version of the
 // code with the feature disabled to confirm it goes red. See the
 // sabotage notes inline.
-import { api, driver, makeReport } from './drive.mjs';
+import { api, driver, makeReport, releaseAll } from './drive.mjs';
 import { execSync } from 'child_process';
 import { writeFileSync, unlinkSync, existsSync, copyFileSync } from 'fs';
 import { readPNG } from './png.mjs';
@@ -484,4 +484,5 @@ if (corpseScreenPos) {
           after.hits > before.hits, `hits ${before.hits} -> ${after.hits}`);
 }
 
+await releaseAll();   // hand the emulator hosts back before exiting
 process.exit(R.done() ? 0 : 1);

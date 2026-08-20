@@ -21,7 +21,7 @@
 //      direction is worse than no split.
 //   6. R3 resets the view.
 //   7. The camera is CLAMPED: it cannot be flung into featureless dark.
-import { api, driver, makeReport } from './drive.mjs';
+import { api, driver, makeReport, releaseAll } from './drive.mjs';
 
 const t = api('formix-camera-suite');
 const R = makeReport();
@@ -280,4 +280,5 @@ let r = await d.inspect();
           d.errors()[0] || '');
 }
 
+await releaseAll();   // hand the emulator hosts back before exiting
 process.exit(R.done() ? 0 : 1);

@@ -1,4 +1,4 @@
-import { api, driver, makeReport } from './drive.mjs';
+import { api, driver, makeReport, releaseAll } from './drive.mjs';
 const t = api('formix-campaign');
 const d = driver(t, process.cwd() + '/formix.wasc');
 const R = makeReport();
@@ -60,4 +60,5 @@ R.check('player has ants on the new level', m2.ants > 0, `ants=${m2.ants}`);
 R.check('no lua errors across the transition', d.errors().length===0,
         d.errors().slice(0,3).join(' | '));
 await d.shot(process.cwd()+'/test/shots/level2.png');
+await releaseAll();   // hand the emulator hosts back before exiting
 process.exit(R.done() ? 0 : 1);

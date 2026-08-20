@@ -4,7 +4,7 @@
 // This asserts on PIXELS, because the whole point is what the player sees:
 // the sim flag being right while the mound renders brown would pass any
 // state-only check and still be the bug.
-import { api, driver, makeReport } from './drive.mjs';
+import { api, driver, makeReport, releaseAll } from './drive.mjs';
 import { readPNG, meanSaturation } from './png.mjs';
 import { execSync } from 'child_process';
 const t = api('formix-grey-suite');
@@ -166,4 +166,5 @@ if (ctrl) {
 }
 
 R.check('no lua errors', d.errors().length === 0, d.errors().slice(0, 2).join(' | '));
+await releaseAll();   // hand the emulator hosts back before exiting
 process.exit(R.done() ? 0 : 1);

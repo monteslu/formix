@@ -14,7 +14,7 @@
 // Written to FAIL: the confetti assertion counts bright flake pixels in
 // the band the burst falls through, and the sabotage (skip the burst)
 // takes it to zero -- recorded in 06-levels.md's sabotage table.
-import { api, driver, makeReport } from './drive.mjs';
+import { api, driver, makeReport, releaseAll } from './drive.mjs';
 import { readPNG } from './png.mjs';
 
 const R = makeReport();
@@ -177,4 +177,5 @@ function flakeInk(im, y0, y1) {
           d.errors().length === 0, d.errors().slice(0, 2).join(' | '));
 }
 
+await releaseAll();   // hand the emulator hosts back before exiting
 process.exit(R.done() ? 0 : 1);

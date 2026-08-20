@@ -14,7 +14,7 @@
 // Written to FAIL: skip the takeFood call and rule 1 goes red; drop the
 // saturation check and rule 3 goes red; bank the food twice and rule 2
 // goes red on the count.
-import { api, driver, makeReport } from './drive.mjs';
+import { api, driver, makeReport, releaseAll } from './drive.mjs';
 import { execSync } from 'child_process';
 import { writeFileSync, unlinkSync, existsSync, copyFileSync } from 'fs';
 
@@ -141,4 +141,5 @@ const FOOD_CART = cartFor('gatefood', 'food-cart.wasc');
 // Restore the ordinary cart so the next gate does not boot a gate board.
 execSync('./build.sh', { stdio: 'ignore' });
 
+await releaseAll();   // hand the emulator hosts back before exiting
 process.exit(R.done() ? 0 : 1);

@@ -1,4 +1,4 @@
-import { api, driver, makeReport } from './drive.mjs';
+import { api, driver, makeReport, releaseAll } from './drive.mjs';
 const t = api('formix-long-suite');
 const d = driver(t, process.cwd() + '/formix.wasc');
 const R = makeReport();
@@ -37,4 +37,5 @@ R.check('colony retains enough ants to ever queen (>=10 total)',
         spent.ants >= 10, `ants=${spent.ants} best mound=${best}`);
 
 R.check('no lua errors over a long run', d.errors().length === 0, d.errors().slice(0,3).join(' | '));
+await releaseAll();   // hand the emulator hosts back before exiting
 process.exit(R.done() ? 0 : 1);

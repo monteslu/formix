@@ -21,7 +21,7 @@
 // Written to FAIL: let an ant re-forage and rule 4 goes red; bank food
 // twice and rules 3 and 5 go red; skip the item decrement and rule 5
 // goes red the other way.
-import { api, driver, makeReport } from './drive.mjs';
+import { api, driver, makeReport, releaseAll } from './drive.mjs';
 import { execSync } from 'child_process';
 import { writeFileSync, unlinkSync, existsSync, copyFileSync } from 'fs';
 
@@ -272,4 +272,5 @@ function locOf(d, id) {
 }
 
 execSync('./build.sh', { stdio: 'ignore' });
+await releaseAll();   // hand the emulator hosts back before exiting
 process.exit(R.done() ? 0 : 1);

@@ -1,4 +1,4 @@
-import { api, driver, makeReport } from './drive.mjs';
+import { api, driver, makeReport, releaseAll } from './drive.mjs';
 import { readPNG } from './png.mjs';
 import { execSync } from 'child_process';
 const t = api('formix-render');
@@ -83,4 +83,5 @@ R.check('the ground is rendered (scene is not black)', groundLum > 12,
         `mean luminance ${groundLum}`);
 
 R.check('no lua errors', d.errors().length === 0, d.errors().slice(0,2).join(' | '));
+await releaseAll();   // hand the emulator hosts back before exiting
 process.exit(R.done() ? 0 : 1);
