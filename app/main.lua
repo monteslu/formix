@@ -115,7 +115,12 @@ end
 -- select and the celebration's "next level" -- both want exactly this,
 -- and doing it in two places is how one of them ends up forgetting to
 -- reset the intents or re-init the probe.
+-- One-shot edge for the defeat dialog. Cleared by startLevel, so a retry
+-- (or any other board change) can lose again and be told about it.
+local lossShown = false
+
 local function startLevel(levelId, keepSave)
+  lossShown = false
   S = sim.new(math.floor(love.math.random() * 2147483000) + 1, levelId)
   if keepSave then
     local blob = save.read()
@@ -157,6 +162,23 @@ function love.update()
     local nextId = S.nextLevelId
     if nextId then startLevel(nextId) end
   end
+  -- THE LOSS DIALOG'S TWO CHOICES. Same between-frames rebuild as every
+  -- other level change here, for the same reason: rebuilding mid-frame
+  -- strands every ant on an edge. `retry` restarts the CURRENT board from
+  -- scratch -- explicitly NOT keepSave, or it would reload the dead colony
+  -- that just lost and the dialog would reopen on the next tick.
+  if celebrate.wantRetry then
+    celebrate.wantRetry = false
+    if S.level and S.level.id then startLevel(S.level.id) end
+  end
+  if celebrate.wantMenu then
+    celebrate.wantMenu = false
+    -- Same two calls the boot path uses. `levelsel.open` is a FLAG, not a
+    -- function, and build() is what fills the rows -- opening without it
+    -- shows the previous board's list.
+    levelsel.build()
+    levelsel.open = true
+  end
   if levelsel.wantLevel then
     local id = levelsel.wantLevel
     levelsel.wantLevel = nil
@@ -182,6 +204,23 @@ function love.update()
     -- same confetti -- see ui/celebrate.lua's note.
     celebrate.show(vp, S.level and S.level.name or "",
                    math.floor((S.time or 0) * 1000) + 7919)
+  end
+
+  -- THE LOSS, ONCE (Luis, 2026-08-20: "i lost my queens and all ants i
+  -- currently loaded war and game didnt end in a loss").
+  --
+  -- `sim.checkDeath` has always latched `S.gameOver` when the player's
+  -- side runs out of ants, brood and fed queens -- it printed `@gameover`
+  -- to the log and set the flag, and NOTHING in app/ ever read it. The
+  -- rule was implemented, gated, and invisible: the run was over and the
+  -- game just kept drawing an empty garden.
+  --
+  -- Latched with a local edge flag rather than by clearing S.gameOver,
+  -- because the sim's own note says death is FINAL -- nothing in the rules
+  -- can undo it, so the flag must stay true for anything else that asks.
+  if S.gameOver and not lossShown then
+    lossShown = true
+    celebrate.show(vp, S.level and S.level.name or "", 0, true)
   end
   celebrate.update(DT)
 

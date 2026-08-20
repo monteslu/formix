@@ -11,7 +11,7 @@
 //   * the rival AI had no REINFORCE step, so every ant stayed on the mound
 //     whose queen laid it -- capitals on thirty, border mounds on four,
 //     permanently under the threshold to attack anything
-import { api, driver, makeReport } from './drive.mjs';
+import { api, driver, makeReport, releaseAll } from './drive.mjs';
 import { execSync } from 'child_process';
 import { writeFileSync, unlinkSync, existsSync, copyFileSync } from 'fs';
 const t = api('formix-war-suite');
@@ -36,7 +36,10 @@ let r = await d.inspect();
 
 const sides = new Set(Object.values(r.mound)
   .filter(m => m.owner && m.owner !== 'you').map(m => m.owner));
-R.check('two distinct enemy colonies, not one', sides.size === 2,
+// ONE rival on this board since 2026-08-20 (two fronts moved to the level
+// after it). Asserted as EXACTLY one, so a second colony cannot creep back
+// in unnoticed.
+R.check('exactly one enemy colony', sides.size === 1,
         `sides=${[...sides].join(',')}`);
 
 // GEOMETRY FIRST. If nothing hostile is inside anything else's reach the
@@ -107,8 +110,18 @@ for (const m of Object.values(r.mound)) {
   const k = m.owner || '-';
   counts[k] = (counts[k] || 0) + 1;
 }
-R.check('both enemy colonies survive to fight', (counts.red || 0) > 0 && (counts.gold || 0) > 0,
+// ONE RIVAL NOW (2026-08-20). War used to field red AND gold, and this
+// asserted both survived. The level is a single-rival board -- two
+// simultaneous fronts moved to the level after it -- so the assertion is
+// that RED is still a going concern, which is what "changes hands could be
+// satisfied by one side quietly dying" was really guarding against.
+R.check('the enemy colony survives to fight', (counts.red || 0) > 0,
         JSON.stringify(counts));
+// And the second rival is genuinely GONE from this board, not merely
+// unmentioned: a stray gold mound would put the old two-front fight back
+// without anyone noticing.
+R.check('war is a one-rival board', !counts.gold,
+        `gold mounds=${counts.gold || 0}`);
 
 R.check('no lua errors during the war', d.errors().length === 0,
         d.errors().slice(0, 2).join(' | '));
@@ -180,13 +193,33 @@ R.check('no lua errors during the war', d.errors().length === 0,
 
   R.check('the war map has food on it to fight over',
           before.items > 0, `items=${before.items}`);
-  R.check('rivals forage for themselves (food leaves the ground unaided)',
-          after.items < before.items,
-          `items ${before.items} -> ${after.items}, player picked ${after.picked}`);
+  // RIVALS FEED THEMSELVES, measured by what it BUYS them rather than by
+  // the item count.
+  //
+  // This used to assert `after.items < before.items` -- food must leave the
+  // ground. That reads as a forage detector and is really a race between
+  // rival mouths and GRAIN REGROWTH, which refills patches forever. The
+  // 2026-08-20 map gave the rival its own patch (so losing the middle once
+  // does not end it as an opponent) and regrowth promptly out-ran its
+  // eating: items went 38 -> 40 while red was demonstrably thriving, and
+  // the gate called a healthy board a failure.
+  //
+  // What the assertion is actually FOR is "the rival is not dependent on
+  // the player to be fed", and the honest evidence is that it grew a large
+  // army from a seeded pantry that cannot possibly cover it. Red starts
+  // this board with 45 food and 26 ants; a colony standing well above that
+  // ant count late in the run has necessarily been eating off the ground,
+  // because there is no other source of food in the rules.
+  R.check('rivals feed themselves (they grow far past what the pantry bought)',
+          after.theirs > 40,
+          `theirs=${after.theirs} from 26 ants + 45 food seeded, ` +
+          `items ${before.items} -> ${after.items} (grain regrows), ` +
+          `player picked ${after.picked}`);
   R.check('and the player did none of it',
           after.picked === 0, `player picked=${after.picked}`);
   R.check('they are still growing at the end, not starved out',
           after.theirs > 0, `theirs=${after.theirs}`);
 }
 
+await releaseAll();   // hand the emulator hosts back before exiting
 process.exit(R.done() ? 0 : 1);

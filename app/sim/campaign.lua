@@ -183,13 +183,37 @@ M.levels = {
       -- so red sat at thirty ants for the whole exploration and arrived
       -- as the same statue the frozen-rival note warns about. Two queens
       -- over twelve workers leaves room to actually fill up.
-      -- MORE BODIES THAN YOU, AND THAT IS THE POINT. Red fields twenty-two
-      -- ants against your twelve, so walking in unprepared loses -- but she
-      -- cannot replace them once the pantry above is gone, and you can.
-      -- The board teaches that an army is something you BUILD toward, and
-      -- it is winnable the moment the player works that out.
-      { kind = "plain", x = 1888, y = -160, foe = "red", ants = 16, queens = 2 },
-      { kind = "small", x = 1520, y = 560,  foe = "red", ants = 6,  queens = 1 },
+      -- THE FIRST ENEMY A PLAYER EVER MEETS SHOULD BE EASY (Luis,
+      -- 2026-08-20: "the first time discovering an enemy in the previous
+      -- level should be easy"). The note above had the right INTENT -- "a
+      -- fight the player WINS" -- and then authored twenty-two ants and
+      -- three queens against the player's twelve and one. Nearly twice the
+      -- bodies and triple the queens is not an introduction, it is a wall,
+      -- and a player who walks in on their first contact loses the column
+      -- and the lesson with it.
+      --
+      -- Red still fields MORE than you, because "send more than they have"
+      -- is the step this board teaches and a garrison you outnumber
+      -- teaches nothing. Fourteen against twelve is a real fight you can
+      -- win with one good column instead of a build-up: enough that
+      -- walking in with six loses, little enough that the first honest
+      -- attempt works. Two queens, not three, so she grows slower than
+      -- the player who is taking ground.
+      --
+      -- Her pantry still runs dry (12 food, every location on the
+      -- player's side), so the "an army is something you BUILD toward"
+      -- lesson survives intact -- it is just no longer gated behind
+      -- losing once to learn it.
+      -- 14 ANTS, BUT KEEP THE SECOND QUEEN. The ant count is what makes
+      -- the first contact winnable; the QUEENS are what keep red a living
+      -- colony that regrows behind its front instead of a fixed garrison
+      -- the player rolls straight through. Cutting both at once (a first
+      -- pass went 22/3 -> 14/2 by dropping the capital to one queen) made
+      -- the walk in test-fog3 capture BOTH red mounds, leaving the board
+      -- with nothing discovered-but-enemy-held to render grey -- a gate
+      -- failure that was really a level-design change.
+      { kind = "plain", x = 1888, y = -160, foe = "red", ants = 10, queens = 2 },
+      { kind = "small", x = 1520, y = 560,  foe = "red", ants = 4,  queens = 1 },
     },
     -- A SPIDER ON THE WAY TO RED, and this is where a grey clump first
     -- bites. It sits off the direct line rather than blocking it, so
@@ -221,63 +245,108 @@ M.levels = {
     id = "war",
     campaign = true,
     name = "War",
-    -- LESSON: everything at once, against opponents who are doing the
-    -- same thing you are. Two rival colonies, on opposite sides, both
-    -- awake from the first second and both expanding into the neutral
-    -- middle. The ground between you is the game.
+    -- LESSON: one opponent doing exactly what you are doing, awake from
+    -- the first tick. Discover taught you that someone else is out here;
+    -- this is the first level where they are AWAKE, FED, and expanding
+    -- toward you while you expand toward them. The ground between you is
+    -- the game.
     --
-    -- They fight EACH OTHER as well as you -- rival.update runs per side
-    -- and simply attacks the weakest thing in reach -- so the map is a
-    -- three-way rather than two-on-one, and letting them meet first is a
-    -- real strategy rather than an exploit.
-    blurb = "Two colonies. Neither of them yours.",
+    -- ONE RIVAL, NOT TWO (Luis, 2026-08-20: "ramping up 2 enemies at that
+    -- point is too much ... right now war is way too hard compared to
+    -- previous level"). The jump this replaces was not a ramp, it was a
+    -- cliff, and the numbers say so plainly:
+    --
+    --            rivals   their food   awake from t=0   their ants
+    --   discover    1           12          no (*)         22
+    --   war (old)   2         90 + 90       yes            46
+    --   war (new)   1           45          yes            23
+    --
+    --   (*) discover's rival sleeps until you find it, so a careless
+    --       player meets it on their own schedule. War's does not sleep,
+    --       and that alone is the step up this level is for.
+    --
+    -- So the new War changes ONE variable at a time: same single rival as
+    -- discover, comparable ant count, but awake, fed for a real match,
+    -- and placed where expansion must collide. Two simultaneous fronts is
+    -- a different lesson and belongs to the level AFTER this one (Luis:
+    -- "the following level can have multiple enemies").
+    blurb = "One colony, awake and coming for the middle.",
     steps = {
       "Hold what you take -- an empty mound is an invitation",
       "They expand while you do; the middle is the prize",
       "Take enough of the field and it is over",
     },
-    -- Both colonies are awake from the first second and expanding, so
-    -- both are fed for the length of a real match. Equal stocks: the
-    -- three-way only works if neither rival is quietly the stronger.
-    startFood = { red = 90, gold = 90 },
+    -- FED FOR A REAL MATCH, NOT FOR A SIEGE. 45 keeps the rival queening
+    -- and pushing for the length of a match without the bottomless 90 that
+    -- let the old pair out-produce anything the player could answer.
+    startFood = { red = 45 },
     -- THE MAP HAS TO BE SMALL ENOUGH TO FIGHT ON. The first version put
-    -- the three colonies in opposite corners of a field 3456 units across
-    -- while a mound reaches ~1150 -- so every side expanded into its own
-    -- corner, ran out of neutral ground and stopped. Two hundred seconds
-    -- in, nobody had ever met anybody: a war map with no war.
+    -- the colonies in opposite corners of a field 3456 units across while
+    -- a mound reaches ~1150 -- so every side expanded into its own corner,
+    -- ran out of neutral ground and stopped. Two hundred seconds in,
+    -- nobody had ever met anybody: a war map with no war.
     --
-    -- These positions are laid out so that ONE mound taken from the middle
-    -- puts each colony in reach of the next. The contested rich pair sits
-    -- between all three.
+    -- OPPOSITE SIDES, one axis. The player holds the west, the rival the
+    -- east, and everything worth having is on the line between them.
+    -- Laid out so ONE mound taken from the middle puts each colony in
+    -- reach of the next (home reaches 1500, plain 1150, small 1000).
     nodes = {
-      { kind = "home",  x = 0, y = 0,     own = true, ants = 16, queens = 1 },
-      { kind = "small", x = -430, y = 470 },
-      { kind = "small", x = 450, y = 500 },
-      -- The contested middle: rich ground nobody starts with, inside
-      -- everyone's second step.
-      { kind = "rich",  x = -250, y = -640 },
-      { kind = "rich",  x = 300, y = -660 },
-      -- The stepping stones. Each is within reach of a capital AND of the
-      -- middle, so holding one is what brings two colonies into contact.
-      { kind = "plain", x = -880, y = -170 },
-      { kind = "plain", x = 900,  y = -150 },
-      -- West colony.
-      { kind = "plain", x = -1380, y = -620, foe = "red",  ants = 18, queens = 1 },
-      { kind = "small", x = -1180, y = 240,  foe = "red",  ants = 5 },
-      -- East colony.
-      { kind = "plain", x = 1400, y = -640,  foe = "gold", ants = 18, queens = 1 },
-      { kind = "small", x = 1210, y = 220,   foe = "gold", ants = 5 },
+      { kind = "home",  x = -1150, y = 0,    own = true, ants = 16, queens = 1 },
+      -- The player's shoulder pair: safe first expansions, and the ground
+      -- a counter-attack has to come through.
+      { kind = "small", x = -1500, y = 620 },
+      { kind = "small", x = -1520, y = -600 },
+      -- The stepping stones, one per side, each in reach of its capital
+      -- AND of the middle. Holding one is what brings the colonies into
+      -- contact, so the fight starts where both players chose it.
+      { kind = "plain", x = -540,  y = -300 },
+      { kind = "plain", x = 560,   y = -280 },
+      -- THE CONTESTED MIDDLE: rich ground nobody starts with, inside
+      -- everyone's second step. This is the prize.
+      { kind = "rich",  x = 0,     y = 380 },
+      { kind = "rich",  x = 20,    y = -800 },
+      -- East colony. ONE rival, mirroring the player's own opening rather
+      -- than doubling it: a capital plus one small, same as the shoulder
+      -- pair, so neither side starts the match ahead.
+      -- A `home`, NOT a `plain`. Measured on the first cut of this map:
+      -- a plain capital caps at THREE queens, so red spent its whole
+      -- pantry queening to that ceiling, sat at five-ant garrisons, and
+      -- with `keep = 3` never had the four spare ants `spare > 3` needs to
+      -- attack ANYTHING. Three mounds, three queens, zero attacks in 300
+      -- seconds -- the exact "expanded, met, then stared at each other"
+      -- deadlock the rival cfg comments already warn about twice.
+      --
+      -- A home mound (maxQueens 4, reach 1500) matches the player's own
+      -- capital, which is the point: this is a mirror match, and the rival
+      -- needs the same room to grow that the player has.
+      { kind = "home",  x = 1200,  y = 0,    foe = "red", ants = 20, queens = 1 },
+      { kind = "small", x = 1520,  y = 600,  foe = "red", ants = 6 },
     },
     -- FOOD IN THE MIDDLE, where the fighting is. Grain in the contested
     -- centre makes the ground everyone wants also the ground everyone
     -- needs, so the war is over something rather than for its own sake.
-    -- A patch behind each colony too, or whoever loses the middle first
-    -- simply stops and is not an opponent any more.
+    --
+    -- MORE FOOD ON THE PLAYER'S SIDE (Luis, 2026-08-20: "player should
+    -- have a little more access to food"). The old map gave each side one
+    -- 5-item grain patch behind its capital and put everything else in the
+    -- contested centre -- so a player who lost the first exchange had
+    -- nothing to rebuild ON, and the level was decided by one fight.
+    -- The west now has a patch pair in easy reach of home plus the aphid
+    -- windfall, which buys a second attempt without handing over the
+    -- middle: the contested food is still the richest ground on the map,
+    -- so taking it is still the winning move rather than an optional one.
     locations = {
-      { kind = "grain",  x = 0,     y = -900, items = 8 },
-      { kind = "aphids", x = 60,    y = 780,  items = 6 },
-      { kind = "grain",  x = -1500, y = 120,  items = 5 },
-      { kind = "grain",  x = 1520,  y = 100,  items = 5 },
+      -- The player's pantry: both inside home's 1500 reach.
+      { kind = "grain",  x = -1560, y = 180,  items = 7 },
+      { kind = "grain",  x = -1180, y = -760, items = 6 },
+      -- A windfall on the player's shoulder, worth a deliberate send.
+      { kind = "aphids", x = -1420, y = 900,  items = 6 },
+      -- THE CONTESTED PANTRY, richest on the map and equidistant.
+      { kind = "grain",  x = 0,     y = -300, items = 8 },
+      { kind = "aphids", x = 40,    y = 900,  items = 6 },
+      -- The rival's own patch, or it loses the middle once and stops
+      -- being an opponent.
+      { kind = "grain",  x = 1560,  y = -300, items = 5 },
     },
   },
   {
@@ -405,14 +474,26 @@ M.levels = {
     generated = false,
     -- PLAN 05, section 6c: `gatespider` has nowhere to withdraw TO. A
     -- second plain mound sits close enough to be reachable the moment
-    -- the player holds n1, which is from the first tick. 12 ants -- a
-    -- drag always sends the WHOLE garrison (touch's fraction gauge only
-    -- steps 25/50/100%, never an exact count), so an "engage 10" test
-    -- needs its OWN precisely-sized garrison, same discipline gatebattle
-    -- uses; 12 leaves headroom above the 10 the plan's own withdrawal
-    -- assertion (#9) engages.
+    -- the player holds n1, which is from the first tick. A drag always
+    -- sends the WHOLE garrison (touch's fraction gauge only steps
+    -- 25/50/100%, never an exact count), so an "engage N" test needs its
+    -- OWN precisely-sized garrison, same discipline gatebattle uses.
+    --
+    -- FIFTEEN, NOT TWELVE (Luis, 2026-08-20). Twelve was sized against a
+    -- SIX second kill period; when it halved to 3s she ate the column
+    -- before all eight legs were ever held, and the subdual and
+    -- withdrawal halves of test-spider had no fight left to measure.
+    --
+    -- Fifteen is deliberately ABOVE `LKINDS.spider.cap = 8`. The cap is
+    -- how many may ENGAGE her at once, not a limit on the drag: the
+    -- surplus waits its turn and replaces the ants she kills, which is
+    -- what keeps eight legs held long enough to subdue her at the faster
+    -- rate. (A 16-ant attempt looked like a refused send while I was
+    -- reading `send()`'s return -- that helper returns drained LOG lines,
+    -- not a send result, so `[]` means "nothing printed this tick", never
+    -- "refused". Do not read it as a status.)
     nodes = {
-      { kind = "plain", x = 0,    y = 0, own = true, ants = 12, queens = 0 },
+      { kind = "plain", x = 0,    y = 0, own = true, ants = 15, queens = 0 },
       { kind = "plain", x = -700, y = 0, own = true, ants = 0,  queens = 0 },
     },
     locations = {

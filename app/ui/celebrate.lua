@@ -20,6 +20,9 @@ local M = {}
 M.open = false
 M.index = 1
 M.wantNext = false
+M.wantRetry = false
+M.wantMenu = false
+M.lost = false
 M.levelName = nil
 
 -- CONFETTI. Presentation only: spawned from the render clock, read by
@@ -80,12 +83,25 @@ function M.burst(vp, seed)
   end
 end
 
-function M.show(vp, levelName, seed)
+-- DEFEAT USES THIS SAME CARD (Luis, 2026-08-20: "i lost my queens and all
+-- ants ... game didnt end in a loss"). sim.checkDeath has always latched
+-- `gameOver` for the player's side, and until now NOTHING in app/ read the
+-- flag -- the sim knew the run was over and the game never said so, so a
+-- dead colony just kept rendering an empty garden.
+--
+-- One card, two moods, rather than a second dialog: the difference is the
+-- word, the colour and whether confetti falls. A separate loss screen
+-- would have been a second layout to keep in step with this one, which is
+-- the drift this file's own history warns about.
+function M.show(vp, levelName, seed, lost)
   M.open = true
   M.index = 1
   M.levelName = levelName
+  M.lost = lost or false
   M.wantNext = false
-  M.burst(vp, seed)
+  -- No confetti for a defeat. `burst` is what puts flakes in the air, so
+  -- simply not calling it leaves the card on a bare scrim.
+  if not M.lost then M.burst(vp, seed) end
 end
 
 function M.update(dt)
@@ -101,21 +117,34 @@ function M.update(dt)
   end
 end
 
-local ROWS = {
+local WIN_ROWS = {
   { key = "next", label = "Next level" },
   { key = "stay", label = "Keep playing" },
 }
+-- A LOST RUN HAS NO "next level" AND NOTHING TO KEEP PLAYING. The colony
+-- is gone; the only honest options are to try this field again or step
+-- back out to the garden. `retry` is handled in main.lua, which owns
+-- level loading -- this file only names the choice.
+local LOSE_ROWS = {
+  { key = "retry", label = "Try this field again" },
+  { key = "menu",  label = "Back to the garden" },
+}
+local function rows() return M.lost and LOSE_ROWS or WIN_ROWS end
 
 function M.handle(kind)
   if not M.open then return false end
+  local R = rows()
   if kind == "up" then
-    M.index = ((M.index - 2) % #ROWS) + 1
+    M.index = ((M.index - 2) % #R) + 1
     return true
   elseif kind == "down" then
-    M.index = (M.index % #ROWS) + 1
+    M.index = (M.index % #R) + 1
     return true
   elseif kind == "confirm" then
-    if ROWS[M.index].key == "next" then M.wantNext = true end
+    local key = R[M.index].key
+    if key == "next"  then M.wantNext  = true end
+    if key == "retry" then M.wantRetry = true end
+    if key == "menu"  then M.wantMenu  = true end
     M.open = false
     return true
   elseif kind == "cancel" then
@@ -149,9 +178,9 @@ end
 function M.hitRow(vp, sx, sy)
   if not M.open then return nil end
   local x, y, w, h, rowH = layout(vp)
-  local ry = y + h - rowH * #ROWS - vp.u(18)
+  local ry = y + h - rowH * #rows() - vp.u(18)
   if sx < x + vp.u(30) or sx > x + w - vp.u(30) then return nil end
-  for i = 1, #ROWS do
+  for i = 1, #rows() do
     local yy = ry + (i - 1) * rowH
     if sy >= yy and sy < yy + rowH then return i end
   end
@@ -223,7 +252,9 @@ function M.draw(vp)
   -- not two.
   g.setColor(0.06, 0.08, 0.07, 0.94)
   g.rectangle("fill", x, y, w, h, vp.u(18))
-  g.setColor(0.55, 0.95, 0.62, 0.55)
+  -- The rim carries the mood: green for a win, a dull ember for a loss.
+  if M.lost then g.setColor(0.92, 0.44, 0.34, 0.55)
+  else           g.setColor(0.55, 0.95, 0.62, 0.55) end
   g.setLineWidth(math.max(2, vp.u(4)))
   g.rectangle("line", x, y, w, h, vp.u(18))
   g.setLineWidth(1)
@@ -234,19 +265,28 @@ function M.draw(vp)
   g.print(nm, x + (w - fName:getWidth(nm)) * 0.5, y + vp.u(26))
 
   g.setFont(fBig)
-  g.setColor(0.60, 0.98, 0.68, 0.98)
-  local done = "Complete"
+  if M.lost then g.setColor(0.96, 0.52, 0.42, 0.98)
+  else           g.setColor(0.60, 0.98, 0.68, 0.98) end
+  -- "The colony is gone" rather than "Defeat": the sim's loss condition is
+  -- literally no ants, no brood and no fed queen, so the word says what
+  -- actually happened on the board.
+  local done = M.lost and "The colony is gone" or "Complete"
   g.print(done, x + (w - fBig:getWidth(done)) * 0.5, y + vp.u(66))
 
-  local ry = y + h - rowH * #ROWS - vp.u(18)
-  for i, row in ipairs(ROWS) do
+  local ry = y + h - rowH * #rows() - vp.u(18)
+  for i, row in ipairs(rows()) do
     local yy = ry + (i - 1) * rowH
     local focused = (i == M.index)
     if focused then
-      g.setColor(0.35, 0.72, 0.42, 0.30)
+      -- The focus chip follows the mood too. A GREEN selected row under
+      -- "The colony is gone" reads as a win at a glance, which is exactly
+      -- the wrong first impression for the one screen that has to land.
+      if M.lost then g.setColor(0.62, 0.28, 0.22, 0.34)
+      else           g.setColor(0.35, 0.72, 0.42, 0.30) end
       g.rectangle("fill", x + vp.u(30), yy, w - vp.u(60), rowH - vp.u(12),
                   vp.u(10))
-      g.setColor(0.55, 0.95, 0.62, 0.8)
+      if M.lost then g.setColor(0.94, 0.50, 0.40, 0.8)
+      else           g.setColor(0.55, 0.95, 0.62, 0.8) end
       g.setLineWidth(math.max(2, vp.u(3)))
       g.rectangle("line", x + vp.u(30), yy, w - vp.u(60), rowH - vp.u(12),
                   vp.u(10))

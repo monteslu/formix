@@ -21,9 +21,9 @@
 // same board at the same zoom -- an absolute pixel count would just be a
 // threshold picked to pass, and the box would satisfy any such number by
 // being brown and present. Area and colour BOTH have to match her.
-import { api, driver, makeReport } from './drive.mjs';
+import { api, driver, makeReport, releaseAll } from './drive.mjs';
 import { execSync } from 'child_process';
-import { writeFileSync, unlinkSync, existsSync, copyFileSync } from 'fs';
+import { writeFileSync, unlinkSync, existsSync, copyFileSync, readFileSync } from 'fs';
 import { readPNG } from './png.mjs';
 
 const R = makeReport();
@@ -311,18 +311,54 @@ function redInk(im, cx, cy, rad) {
   R.check('a carried queen is DRAWN on the way home (red ink off-mound)',
           carryInk > 8, `carryInk=${carryInk}px (live was ${liveInk}px)`);
 
-  // THE ANTI-BOX ASSERTION. The bespoke quad blob measured roughly a
-  // quarter of her live area at matched zoom; a real queenBody() corpse
-  // is the same construction at ~1.05x the carrier's size. Requiring the
-  // carried body to be a substantial FRACTION of her live footprint is
-  // what a box cannot satisfy without becoming her.
+  // SHE IS DRAWN AT ALL. Pixel ink proves she is on screen and is not a
+  // crumb; it CANNOT prove she is the same size, which is what the
+  // requirement actually is. See the source assertion below for that.
   R.check('the carried body is queen-sized, not a crumb-sized box',
-          liveInk > 0 && carryInk >= liveInk * 0.18,
+          liveInk > 0 && carryInk >= liveInk * 0.90,
           `carried=${carryInk}px live=${liveInk}px ` +
-          `ratio=${liveInk ? (carryInk / liveInk).toFixed(2) : 'n/a'} (need >=0.18)`);
+          `ratio=${liveInk ? (carryInk / liveInk).toFixed(2) : 'n/a'} (need >=0.90)`);
 
   R.check('no lua errors across the art capture',
           d.errors().length === 0, d.errors().slice(0, 2).join(' | '));
 }
 
+// ── EXACTLY THE SAME SIZE, ASSERTED ON THE SOURCE ─────────────────────
+//
+// The requirement is not "close enough" or "a big fraction of": a
+// carried queen is THE SAME MODEL AT THE SAME SIZE as the queen the
+// player watched die. Three rounds of this bug shipped because the gate
+// measured PIXEL INK and ink cannot carry that requirement:
+//
+//   scale 1.05 (half-size, WRONG)  ->  ratio 1.17, gate green
+//   scale 2.00 (correct)           ->  ratio 1.81, gate green
+//
+// Both clear any ratio floor you can set without also failing the
+// correct build, because the live queen is partly occluded by her own
+// mound while a dragged corpse is in the clear. Measuring harder cannot
+// fix an assertion aimed at the wrong thing.
+//
+// So this asserts the property directly: both call sites multiply
+// `antSize` by the SAME named constant. That is what makes the sizes
+// identical by construction rather than by two literals someone has to
+// remember to keep in step -- the UNKNOWN_H lesson from nodepanel.lua,
+// which this file's own history should have taught first.
+{
+  const src = readFileSync('app/render/ants.lua', 'utf8');
+  const calls = [...src.matchAll(/queenBody\([^)]*?antSize\s*\*\s*([A-Za-z_][\w.]*|[\d.]+)/g)]
+                  .map(m => m[1]);
+  const carry = (src.match(/local qsz = antSize \* ([A-Za-z_][\w.]*|[\d.]+)/) || [])[1];
+  const scales = [...calls, carry].filter(Boolean);
+
+  R.check('every queen is drawn from the same scale constant',
+          scales.length >= 2 && scales.every(v => v === scales[0]) && !/^[\d.]+$/.test(scales[0]),
+          `scales=[${scales.join(', ')}]` +
+          (scales.length < 2 ? ' (expected the live queen AND the carried one)' : ''));
+
+  R.check('and that constant is defined once',
+          (src.match(/^local QUEEN_SCALE = /gm) || []).length === 1,
+          `QUEEN_SCALE definitions=${(src.match(/^local QUEEN_SCALE = /gm) || []).length}`);
+}
+
+await releaseAll();   // hand the emulator hosts back before exiting
 process.exit(R.done() ? 0 : 1);

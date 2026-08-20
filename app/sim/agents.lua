@@ -153,7 +153,18 @@ M.cfg = {
   -- is STABBING her first: only when no strikers remain does she start
   -- tearing leg-holders off, which frees the leg and un-subdues her.
   -- See M.fightSpider.
-  spiderKillPeriod = 6.0,
+  --
+  -- THREE SECONDS, NOT SIX (Luis, 2026-08-20: "the spider can attack a
+  -- little faster than 6 seconds, lets say 3 seconds"). At six she was
+  -- subdued and whittled down on a clock the player never felt any
+  -- pressure from; doubling her rate makes a swarm that arrives piecemeal
+  -- actually cost something, without touching her 20 hp or the eight-leg
+  -- pin that makes the fight a fight.
+  -- MUST EQUAL world.lua's LKINDS.spider.killPeriod, which seeds her
+  -- first countdown while this drives every kill after it. test-spider
+  -- asserts the two agree, because a mismatch is invisible in play: only
+  -- the first kill is early or late.
+  spiderKillPeriod = 3.0,
   spiderHp     = 20,
   spiderLegs   = 8,
 }

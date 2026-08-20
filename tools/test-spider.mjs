@@ -13,7 +13,8 @@
 // Written to FAIL, per docs/ARCHITECTURE.md: every check below either has
 // a control that must diverge, or was verified by sabotage while this
 // gate was built. See the sabotage notes inline.
-import { api, driver, makeReport } from './drive.mjs';
+import { api, driver, makeReport, releaseAll } from './drive.mjs';
+import { readFileSync } from 'fs';
 import { execSync } from 'child_process';
 import { writeFileSync, unlinkSync, existsSync, copyFileSync } from 'fs';
 import { readPNG } from './png.mjs';
@@ -96,21 +97,33 @@ function antPixels(path, cx, cy, rad) {
   R.check('7 ants engage: spider hp stays 20 while under 8 (no legs held yet)',
           s0 && s0.hp === 20, s0 ? `hp=${s0.hp} held=${s0.held}` : 'no spider line');
 
-  // Ant count ticks down one per 6s (+/- one tick): with 20 committed the
-  // fight resolves too fast to isolate a single kill cleanly (measured
-  // while building this gate -- legs fill and she is subdued within the
-  // first killPeriod, and dies well inside the second). What is testable
-  // and IS the rule under test either way: she never dies faster than
-  // her kill clock allows the player to lose ants, i.e. `mine` never
-  // drops by more than ceil(elapsed / 6) + 1 -- the OLD guard-trade code
-  // could drop six ants in the time this send takes to ARRIVE (the
-  // control below proves that shape is gone).
+  // Ant count ticks down one per KILL_PERIOD (+/- one tick): with 20
+  // committed the fight resolves too fast to isolate a single kill
+  // cleanly (measured while building this gate -- legs fill and she is
+  // subdued within the first killPeriod, and dies well inside the
+  // second). What is testable and IS the rule under test either way: she
+  // never dies faster than her kill clock allows the player to lose ants
+  // -- the OLD guard-trade code could drop six ants in the time this send
+  // takes to ARRIVE (the control below proves that shape is gone).
+  //
+  // KILL_PERIOD TRACKS THE SIM, IT IS NOT A COPY OF IT. This window was
+  // hardcoded to 6s in three places; when the period moved to 3s (Luis,
+  // 2026-08-20) a literal would have kept passing while measuring the
+  // wrong thing -- stepping 6s and allowing one kill silently permits
+  // TWO at the new rate. Read it from agents.lua so the gate cannot drift
+  // from the rule it is guarding.
+  const KILL_PERIOD = Number(
+    (readFileSync('app/sim/agents.lua', 'utf8')
+      .match(/spiderKillPeriod\s*=\s*([\d.]+)/) || [])[1]);
+  R.check('the gate found the sim\'s kill period', KILL_PERIOD > 0,
+          `spiderKillPeriod=${KILL_PERIOD}`);
+
   let m0 = await d.metric();
-  await d.step(360);   // 6s: at most one guaranteed kill can have landed
+  await d.step(Math.round(KILL_PERIOD * 60));   // at most one guaranteed kill
   let m1 = await d.metric();
   const lost = m0.mine - m1.mine;
   R.check('at most one ant is lost per killPeriod, never a toll-trade batch',
-          lost <= 1, `lost=${lost} over 6s (mine ${m0.mine} -> ${m1.mine})`);
+          lost <= 1, `lost=${lost} over ${KILL_PERIOD}s (mine ${m0.mine} -> ${m1.mine})`);
   R.check('CONTROL: the old code drops SIX arrivals to a guard trade in far less than 6s -- '
           + 'this shape (guard=6, instant per-arrival trade) is deleted, not just slow now',
           true, 'guard field removed from world.lua LKINDS.spider; verified by reading the diff');
@@ -152,7 +165,8 @@ function antPixels(path, cx, cy, rad) {
           `mine=${m.mine} owner=${loc ? loc.owner : 'no loc line'}`);
 }
 
-// ── 3. STRIKERS DIE FIRST: engage 12 (8 holders + 4 strikers) and watch
+// ── 3. STRIKERS DIE FIRST: engage 15 (8 holders + strikers, plus a
+//    reserve that replaces her kills) and watch
 //    a kill land on a striker while all 8 legs stay held ──────────────
 {
   const t = api('formix-spider-strikersFirst');
@@ -168,7 +182,7 @@ function antPixels(path, cx, cy, rad) {
     s = (await d.inspect()).spider.L3;
     if (s && s.subdued) subduedAt = (await d.metric()).t;
   }
-  R.check('12 engaged (8 holders + 4 strikers) reaches subdued',
+  R.check('15 engaged (8 holders + strikers + reserve) reaches subdued',
           subduedAt !== null, s ? `held=${s.held}` : 'no spider line');
 
   if (subduedAt !== null) {
@@ -611,4 +625,5 @@ if (spiderPos) {
   }
 }
 
+await releaseAll();   // hand the emulator hosts back before exiting
 process.exit(R.done() ? 0 : 1);

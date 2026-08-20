@@ -202,6 +202,13 @@ end
 -- not wearing it -- and her round pupils become crossed X strokes, the
 -- unmistakable "she is not alive" tell Luis asked for ("X's instead of
 -- her round eyes after she's dead").
+-- A queen is TWICE a worker, alive or dead. Both call sites (the live
+-- queen on her mound, and the corpse an ant drags home) multiply
+-- `antSize` by this, so she cannot be one size in one place and another
+-- size in the other. See the carry block for what happened when they
+-- were two separate literals.
+local QUEEN_SCALE = 2.0
+
 local function queenBody(x, y, dir, size, col, gait, dead)
   local g = love.graphics
   local c, sn = math.cos(dir), math.sin(dir)
@@ -441,7 +448,7 @@ function M.draw(snap, vp)
         -- worker -- with a small sway and a slow leg cycle so she is
         -- alive rather than a decal.
         local qx, qy, face = queenPos(n, qi, #n.queens)
-        queenBody(qx, qy, face, antSize * 2.0, col, t * 0.9 + qi)
+        queenBody(qx, qy, face, antSize * QUEEN_SCALE, col, t * 0.9 + qi)
       end
     end
   end
@@ -663,7 +670,20 @@ function M.draw(snap, vp)
           -- body is dragged rather than presented. Sized off `antSize`
           -- (the carrier's own scale) rather than `isz`, because she is a
           -- QUEEN -- twice a worker -- not an item.
-          local qsz = antSize * 1.05
+          --
+          -- THE SAME SIZE SHE WAS ALIVE. `QUEEN_SCALE` is the one number
+          -- both call sites read, because this is the THIRD time the
+          -- carried queen has come back wrong (Luis, 2026-08-20: "a
+          -- smaller queen being dragged back to hive ... I was explicit
+          -- about using the same fucking model"). Routing both through
+          -- one CONSTRUCTOR fixed her shape and left her scale free to
+          -- drift: this block said `antSize * 1.05` while the live queen
+          -- said `antSize * 2.0`, so she was drawn at half the body the
+          -- player had just watched die. Same lesson as UNKNOWN_H in
+          -- nodepanel.lua -- two numbers that must stay equal must be ONE
+          -- number, or the comment saying "twice a worker" sits directly
+          -- above a constant that is not.
+          local qsz = antSize * QUEEN_SCALE
           local qx = sx - ca * (antSize * 1.25 + qsz * 0.6)
           local qy = sy - sa * (antSize * 1.25 + qsz * 0.6)
           -- Her own side's colour, dimmed: she is meat now, not a

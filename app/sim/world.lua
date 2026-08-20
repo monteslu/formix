@@ -104,8 +104,15 @@ local LKINDS = {
   -- save v5 blobs still carry that field name in the same column -- see
   -- save.lua's version note on why that makes a v5 blob unloadable
   -- rather than reinterpretable.
+  -- killPeriod SEEDS the first countdown only; every kill after it is
+  -- driven by agents.lua's `cfg.spiderKillPeriod`. They must be the same
+  -- number or her FIRST kill lands on a different clock from the rest --
+  -- which is exactly what a stale 6.0 here did when the period moved to 3
+  -- (2026-08-20). Kept as a literal rather than a require to avoid a
+  -- world<->agents import cycle, so the agents.lua constant carries a
+  -- matching note and test-spider asserts the two agree.
   spider = { radius = 96, range = 900, items = 0, cap = 8, value = 3,
-             spoils = 8, hp = 20, legs = 8, killPeriod = 6.0 },
+             spoils = 8, hp = 20, legs = 8, killPeriod = 3.0 },
 }
 M.LKINDS = LKINDS
 
