@@ -353,18 +353,291 @@ M.levels = {
     id = "open",
     campaign = true,
     name = "The open field",
-    blurb = "Everything, all at once.",
-    generated = true,
+    -- LESSON: two fronts at once, and you cannot answer both.
+    --
+    -- THIS WAS A PLACEHOLDER AND THE CAMPAIGN COULD NOT BE FINISHED.
+    -- It was `{ id = "open", campaign = true, generated = true }` and
+    -- nothing else -- the last row of the level select, with no nodes, no
+    -- locations and no lesson. Worse, `M.complete` returns false for any
+    -- generated level, so `open` could never be beaten by anyone: the
+    -- final row of the campaign was permanently unwinnable and the game
+    -- had no ending.
+    --
+    -- AUTHORED, NOT GENERATED, for the reason at the top of this file: a
+    -- generated map cannot guarantee that the only sensible move is the
+    -- one being taught, and the thing being taught here is specifically
+    -- SHAPE -- two enemies placed so that committing to one exposes you
+    -- to the other. A scatter cannot promise that; it can only promise
+    -- that there are two of them somewhere.
+    --
+    -- TWO ENEMIES (Luis, 2026-08-20: "the following level can have
+    -- multiple enemies"). War was cut to a single rival because two awake
+    -- colonies straight after discover's one dormant one was a cliff.
+    -- That fight did not stop being worth having -- it stopped being the
+    -- right SECOND enemy. It is the right fifth one, after a mirror match
+    -- has taught what one awake opponent costs.
+    blurb = "Two colonies, two directions. You cannot answer both.",
+    steps = {
+      "Two enemies, and they fight each other as readily as you",
+      "Committing everything to one front opens the other",
+      "Break them both and the field is yours",
+    },
+    -- BOTH FED, AND UNEQUALLY. Red is the aggressor with the bigger
+    -- pantry; gold starts smaller and slower. Equal opponents would make
+    -- the board symmetrical and the choice arbitrary -- which front to
+    -- take first should have a right answer that the map states in its
+    -- shape and its numbers rather than one the player guesses.
+    --
+    -- MEASURED AND CUT (2026-08-20). The first authored cut of this board
+    -- gave red 55 and gold 40 against a player capital of 18 ants, and a
+    -- scripted greedy player was ELIMINATED by 200 seconds -- while the
+    -- SAME script on the war map survived the full run. That comparison
+    -- is what makes this a level problem rather than a bad script: one
+    -- opponent at 45 food is a match, two at 55+40 is not two fronts, it
+    -- is a rout. The pantries come down to a shade under War's single
+    -- rival EACH, so the pair together is a step up from War rather than
+    -- double it -- which is the ramp this level is supposed to be.
+    --
+    -- They still compound (a patch behind each capital, below), so
+    -- neither stops being an opponent after losing the middle once.
+    startFood = { red = 40, gold = 30 },
+    -- THE SHAPE: you at the west point of a triangle, red north-east,
+    -- gold south-east, with the prize in the middle of all three. Each
+    -- rival is closer to the middle than you are, so the centre cannot
+    -- simply be taken and held early -- and they are within reach of
+    -- EACH OTHER, which is the pressure valve that keeps two opponents
+    -- from being twice one opponent: each rival brain attacks the
+    -- weakest thing in its reach, and sometimes that is the other rival.
+    nodes = {
+      -- Your capital and the shoulder pair, the same opening the player
+      -- has had since War -- so the thing that is new here is the number
+      -- of enemies, not the hand you start with.
+      -- TWENTY-FOUR AND TWO QUEENS, not eighteen and one. The player has
+      -- to garrison two directions from the first minute, and a single
+      -- capital's output cannot do that: the measured run above lost the
+      -- shoulder pair and then home, because every ant spent on one front
+      -- was an ant missing from the other. Two queens is the smallest
+      -- change that makes holding two fronts arithmetically possible
+      -- rather than a matter of playing perfectly, and it is the same
+      -- shape as the lesson -- the answer to two fronts is more
+      -- production, not better aim.
+      { kind = "home",  x = -1600, y = 0,     own = true, ants = 24, queens = 2 },
+      -- The shoulder pair starts GARRISONED here, unlike War's empty
+      -- pair. On a one-front board an empty shoulder is a free expansion;
+      -- with two rivals it is an open door on whichever side the player
+      -- is not looking at, and both were being taken before the player
+      -- could reach them.
+      { kind = "small", x = -1900, y = 700,  own = true, ants = 4 },
+      { kind = "small", x = -1920, y = -680, own = true, ants = 4 },
+      -- Your stepping stones, one toward each front. Taking BOTH is what
+      -- a player instinctively does and is exactly what the level is
+      -- about: it splits a garrison that was only ever big enough for one.
+      { kind = "plain", x = -820,  y = -560 },
+      { kind = "plain", x = -800,  y = 580 },
+      -- THE CONTESTED MIDDLE, richest ground on the board and inside
+      -- everyone's second step.
+      { kind = "rich",  x = 120,   y = 0 },
+      -- THE TWO APPROACHES, one per front, and their positions are a
+      -- CONNECTIVITY REQUIREMENT rather than a matter of taste.
+      --
+      -- At (260,-900) and (240,920) this board was BROKEN: every mound
+      -- was reachable from something, but nothing the player could hold
+      -- reached either enemy capital, so all four enemy mounds were
+      -- stranded and the level could never be won. `test-reachable`
+      -- caught it on the first full-suite run and that is exactly what
+      -- that gate is for -- the BFS carries forward only through the
+      -- SOURCE mound's reach, so "A is 1242 from B and B reaches 1500"
+      -- does not connect A to B.
+      --
+      -- Pushed out to (560,-980) and (540,1000), each approach lands
+      -- inside its own enemy capital's reach (954 and 911 against a plain
+      -- mound's 1150) and neither reaches the other's (2040 and 2058).
+      -- That asymmetry is the design surviving the fix: taking the north
+      -- approach opens red and only red.
+      { kind = "plain", x = 560,   y = -980 },
+      { kind = "plain", x = 540,   y = 1000 },
+      -- RED, north-east: the aggressor. A home capital so she has the
+      -- room to grow that a plain mound's three-queen ceiling denies --
+      -- the exact deadlock the war map hit when its rival was authored
+      -- as a plain.
+      { kind = "home",  x = 1500,  y = -820, foe = "red",  ants = 18, queens = 1 },
+      { kind = "small", x = 1820,  y = -1400, foe = "red", ants = 5 },
+      -- GOLD, south-east: smaller and further from the middle, so the
+      -- two fronts are not the same fight twice. A player who reads the
+      -- board can take gold first and turn on red with one flank quiet.
+      { kind = "home",  x = 1440,  y = 860,  foe = "gold", ants = 14, queens = 1 },
+      { kind = "small", x = 1800,  y = 1420, foe = "gold", ants = 4 },
+    },
+    -- FOOD ON EVERY SIDE, weighted to the player. Two enemies means two
+    -- rebuilds after two lost exchanges, so the west has to support that
+    -- or the level is decided by whichever front goes wrong first.
+    locations = {
+      -- The player's pantry, both inside home's 1500 reach.
+      { kind = "grain",  x = -2000, y = 240,  items = 8 },
+      { kind = "grain",  x = -1560, y = -820, items = 7 },
+      { kind = "aphids", x = -1880, y = 1020, items = 6 },
+      -- The contested centre: the richest ground on the map, equidistant
+      -- from all three capitals.
+      { kind = "grain",  x = 100,   y = -320, items = 9 },
+      { kind = "aphids", x = 140,   y = 380,  items = 7 },
+      -- One patch behind each rival, so neither stops being an opponent
+      -- after losing the middle once.
+      { kind = "grain",  x = 1900,  y = -600, items = 6 },
+      { kind = "grain",  x = 1860,  y = 1000, items = 5 },
+      -- A SPIDER BETWEEN THE TWO FRONTS, on the line a player walks when
+      -- they swing an army from one enemy to the other. Every other
+      -- spider in the campaign is met by choice; this one is met by
+      -- changing your mind, which is the last thing this board has to
+      -- say about committing.
+      { kind = "spider", x = 620,   y = 0 },
+    },
   },
 
   -- ── GATE-ONLY BOARDS, past the end of the campaign ────────────────────
   --
   -- Everything below is reachable ONLY by packing an `app/startlevel`
-  -- marker naming it. `next()` walks this list in order and `open` is
-  -- generated and never completes, so no player can ever arrive here.
+  -- marker naming it. `next()` walks this list in order and stops at the
+  -- end of the campaign: `open` is the last level with `campaign = true`,
+  -- and beating it sets `nextLevelId` to nil rather than advancing into
+  -- the fixtures. (This used to rest on `open` being unwinnable, which
+  -- was true and was also the bug -- the campaign had no ending. The
+  -- guard is now the campaign flag, which is a rule rather than an
+  -- accident.)
   -- They exist because a rule is only proved on a board built to prove
   -- it: gathering twelve ants by hand to reach the interesting state is
   -- how gates end up asserting on the setup instead of on the rule.
+  {
+    id = "gatefog",
+    name = "Gate: fog states",
+    blurb = "A mound you can walk to, and one you cannot.",
+    generated = false,
+    -- PLAN 04's FOG GATE FIXTURE, and it exists to break a coupling.
+    --
+    -- test-fog3 used to produce its "discovered but enemy-held" state by
+    -- walking toward `discover`'s red colony and waiting for the board to
+    -- hand one over -- which works only while red is strong enough to
+    -- still hold something when the walk ends. The 2026-08-20 tuning pass
+    -- (red 22 ants -> 14) broke exactly that, and the gate went red for a
+    -- LEVEL BALANCE change while the fog rendering it tests was untouched.
+    -- Restoring red's second queen fixed it and left the dependency in
+    -- place for the next tuning pass to trip over.
+    --
+    -- A gate asserting on a RENDER RULE must not be able to fail because
+    -- a level got easier. So the state is authored here instead of hoped
+    -- for:
+    --
+    --   n1  your home, with a column big enough to take n3 ONCE.
+    --   n2  a neutral stepping stone, so the walk is a real two-hop walk.
+    --   n3  THE SUBJECT: weakly held by red and inside your reach, so a
+    --       column can take it -- which is what makes it `visited`.
+    --   n4  red's fed, queened capital behind it, close enough to n3 to
+    --       retake it and strong enough to do so reliably.
+    --
+    -- `visited` IS SET ON ARRIVAL, NOT ON SIGHT (sim/init.lua: "Set on
+    -- arrival only (`at`), never on approach"). A first attempt at this
+    -- fixture put the subject mound OUTSIDE the player's reach so it
+    -- could never be taken by accident -- which would have been a tidier
+    -- shape and cannot work, because a mound you can never stand on
+    -- never becomes discovered at all. The state the gate needs is
+    -- necessarily "stood on once, lost since", so the board is built to
+    -- GUARANTEE the losing half rather than to prevent the taking half.
+    --
+    -- THE PLAYER'S COLUMN IS DELIBERATELY THIN. Ten ants takes n3's five
+    -- and leaves too few to hold it against what n4 sends back. On
+    -- `discover` this was left to whether red happened to still be strong
+    -- after the walk -- which is precisely the level-balance dependency
+    -- this fixture exists to delete.
+    --
+    -- RED IS FED AND QUEENED so it regrows behind its front -- the
+    -- property that made `discover` usable for this and the property that
+    -- the ant-count tuning threatened. Here it is the fixture's own
+    -- requirement rather than something borrowed from a level whose job
+    -- is to teach.
+    startFood = { red = 30 },
+    -- RED SLEEPS UNTIL THE PLAYER ARRIVES, and on a fixture that is a
+    -- determinism requirement rather than a kindness.
+    --
+    -- Awake from t=0, red's capital simply RUSHED: it took the neutral
+    -- stepping stone while the player's column was still walking to it,
+    -- so the second hop had no mound of ours to launch from, the subject
+    -- was never taken, never became `visited`, and the gate sat watching
+    -- an UNKNOWN mound for 140 seconds reporting that the state never
+    -- appeared. Every retune of the ant counts moved which of those two
+    -- races was won and none of them made the order reliable.
+    --
+    -- `wakeOnContact` removes the race outright: red does nothing until
+    -- the player's frontier reaches it, so the walk always completes and
+    -- the counter-attack always happens AFTER the take. The fixture then
+    -- tests what it is for -- a mound remembered and lost -- instead of
+    -- testing whose ants arrived first.
+    wakeOnContact = true,
+    nodes = {
+      { kind = "plain", x = 0,    y = 0,    own = true,  ants = 14, queens = 1 },
+      -- THE REAR BASE, and the control assault is what it is for.
+      --
+      -- After the exchange the player has usually been pushed off
+      -- everything forward of home, so the phase that re-attacks the lost
+      -- mound -- proving that an INBOUND column reveals defenders a
+      -- merely-discovered one hides -- had nowhere to launch from and
+      -- went untested. This mound sits BEHIND home, garrisoned, out of
+      -- red's line of advance, and in reach of home so its ants can come
+      -- forward when they are needed. It is a launch pad, not a second
+      -- front.
+      --
+      -- ITS DISTANCE IS MEASURED AGAINST THE STEPPING STONE, not against
+      -- home. The stone at (1000,0) is the mound the player takes and
+      -- then loses, so it is the ground the control assault re-attacks; a
+      -- launch pad that reaches only home is no use, because the walk
+      -- empties home on its way out. Two placements BEHIND home failed
+      -- exactly that way (x=-900 and x=-500, leaving the stone 798 then
+      -- 630 screen pixels away against a 483px reach) while twelve ants
+      -- stood two mounds back doing nothing.
+      --
+      -- OFF THE AXIS instead of behind it. (400,-600) is 849 world units
+      -- from the stone and 721 from home -- both comfortably inside a
+      -- plain mound's 1150 reach -- so this mound can reinforce home OR
+      -- strike the stone directly, whichever the exchange leaves needed.
+      -- It is still off red's line of advance (which runs west along
+      -- y=0), so it survives to do it.
+      { kind = "plain", x = 400,  y = -600, own = true,  ants = 12, queens = 1 },
+      -- THE STEPPING STONE, and it must stay in reach of the subject
+      -- AFTER the subject is lost. The gate's control assault re-sends at
+      -- the retaken mound to prove that an inbound column reveals its
+      -- defenders, and it needs somewhere to send FROM: at 900 apart the
+      -- player kept n2 but could not reach n3 from it (1900 > a plain
+      -- mound's 1150), so the control had no launch point and the whole
+      -- reveal half of the phase went untested.
+      { kind = "plain", x = 1000, y = 0 },
+      -- THE SUBJECT. Held by a garrison the player's ten CAN take but
+      -- cannot then hold: the point of this board is a mound that is
+      -- yours for a moment and red's afterwards.
+      --
+      -- TUNED AGAINST A REAL FAILURE, worth recording because the
+      -- symptom was misleading. At five defenders the column took n3 and
+      -- then STUCK there -- `held=true` for the whole of a 150-second
+      -- watch, with the survivors grinding against red's trickle of
+      -- reinforcements and neither side ever finishing. `held` is what
+      -- the gate's "quiet" predicate excludes, so the state never
+      -- appeared and the failure read as "the counter-attack is broken"
+      -- when the real answer was that nobody ever left.
+      --
+      -- Eight defenders makes the exchange DECISIVE instead: the ten
+      -- spend themselves taking it, red's capital walks in behind them,
+      -- and n3 is enemy-held with none of yours on it -- which is exactly
+      -- the state, and it arrives by the fight ENDING rather than by
+      -- either side being lucky.
+      { kind = "small", x = 1800, y = 0,    foe = "red", ants = 6 },
+      -- RED'S CAPITAL, in easy reach of the subject. A `home` for the
+      -- same reason war's rival is one: a plain mound caps at three
+      -- queens and stops being able to spare anything.
+      { kind = "home",  x = 2850, y = 0,    foe = "red", ants = 22, queens = 2 },
+    },
+    locations = {
+      -- Something to forage so the player's column has a reason to exist
+      -- and the board is not purely two mounds staring at each other.
+      { kind = "grain", x = -600, y = 320, items = 6 },
+    },
+  },
   {
     id = "gatefood",
     name = "Gate: food",
@@ -554,6 +827,31 @@ M.levels = {
     },
   },
   {
+    -- COLOUR CHECK FIXTURE: one red queen and one gold queen, both held by
+    -- the player's ants so both are visible at once. The queen colour bug
+    -- (every enemy queen drawn with a hardcoded reddish literal, so gold's
+    -- queens came out red) is only visible on a board with TWO rival
+    -- colours, which is why it survived every earlier gate.
+    id = "gatequeencol",
+    name = "Gate: queen colour",
+    blurb = "A red queen and a gold queen, side by side.",
+    generated = false,
+    nodes = {
+      -- The player sends a SMALL column to each: enough to stand on the
+      -- ground (which is what reveals an enemy queen -- see the `held`
+      -- rule in render/ants.lua) but not enough to take it, so both
+      -- queens stay alive and on screen to be photographed.
+      -- TWO player mounds, one facing each enemy, so a column can be sent
+      -- to each independently -- a single source sends its WHOLE garrison
+      -- (the drag fraction only steps 25/50/100%), so one mound could
+      -- only ever hold one of them.
+      { kind = "plain", x = 0,    y = -400, own = true, ants = 6,  queens = 0 },
+      { kind = "plain", x = 0,    y = 400,  own = true, ants = 6,  queens = 0 },
+      { kind = "plain", x = 700,  y = -400, foe = "red",  ants = 14, queens = 1 },
+      { kind = "plain", x = 700,  y = 400,  foe = "gold", ants = 14, queens = 1 },
+    },
+  },
+  {
     id = "gatesiege2",
     name = "Gate: defended siege",
     blurb = "A queen behind her workers.",
@@ -641,9 +939,8 @@ end
 -- uncompleted level" means the next one rather than skipping straight to
 -- the war map on a fresh file.
 --
--- `open` is the generated everything-at-once board and never completes,
--- so it can never itself be a frontier that hides the levels after it --
--- there are none after it.
+-- `open` is the last campaign level, so when it is the frontier there is
+-- nothing after it for a frontier to hide.
 function M.selectable(beaten)
   local list = M.playable()
   local out, frontierTaken = {}, false
@@ -662,10 +959,25 @@ function M.selectable(beaten)
   return out
 end
 
+-- THE NEXT CAMPAIGN LEVEL, or nil at the end of the campaign.
+--
+-- THE CAMPAIGN FLAG IS THE STOP, not the end of the array. This walked
+-- `M.levels[i + 1]` unconditionally, which was harmless only because
+-- `open` could never be completed -- the moment it could, beating the
+-- last campaign level would have handed the player `gatefood`: a
+-- one-mound gate fixture, offered as "the next garden", with the
+-- celebration card advertising it. Making `open` winnable is exactly the
+-- change that would have shipped that, so the guard goes in with it.
+--
+-- Returning nil is already a state everything downstream handles:
+-- `s.nextLevelId` is nil, ui/celebrate.lua's dialog drops its "next
+-- garden" row, and intents.lua's START stays the pause menu.
 function M.next(id)
   local _, i = M.byId(id)
   if not i then return nil end
-  return M.levels[i + 1]
+  local nxt = M.levels[i + 1]
+  if not nxt or not nxt.campaign then return nil end
+  return nxt
 end
 
 -- WHICH STEP THE PLAYER IS ON, read from the world rather than a script.
@@ -776,6 +1088,26 @@ function M.complete(level, world, agents)
   if level.id == "war" then
     -- Both colonies broken. Same rule as `discover` and for the same
     -- reason; the difference is how much stands between you and it.
+    for i = 1, #world.nodes do
+      local n = world.nodes[i]
+      if n.owner and n.owner ~= "you" then return false end
+    end
+    return true
+  end
+  if level.id == "open" then
+    -- THE CAMPAIGN HAS AN ENDING NOW. `open` was generated, and
+    -- `M.complete` refuses every generated level outright (the first line
+    -- of this function), so the last row of the campaign could not be
+    -- beaten by anybody -- a player who reached it was finished with the
+    -- game whether they won or not, and `progress.markBeaten` never fired
+    -- for it.
+    --
+    -- BOTH ENEMIES GONE, not a territory fraction. The 66%-of-the-board
+    -- fallback below would let a player finish while one rival still held
+    -- a corner, which on the level whose whole lesson is "you cannot
+    -- answer both fronts" is precisely the state that must not count as
+    -- an answer. Same rule as war and discover, against two colonies
+    -- instead of one.
     for i = 1, #world.nodes do
       local n = world.nodes[i]
       if n.owner and n.owner ~= "you" then return false end

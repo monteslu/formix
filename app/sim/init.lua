@@ -759,6 +759,9 @@ function M.update(s, dt)
   -- the same mound in different colours trade blows until one side is gone;
   -- see A.fight. Ordering matters only in that arrivals should join the
   -- fight on the tick they land, which is what running it after update does.
+  -- Cleared at the START of the tick that will refill it, so a reader
+  -- after M.update sees this tick's deliveries and never last tick's.
+  s.deliveredThisTick = 0
   A.fight(s.agents, dt)
   -- THE SPIDER (plan 05): a separate subdual fight, same reason it runs
   -- after A.update -- an ant that just arrived should be able to grab a
@@ -781,6 +784,12 @@ function M.update(s, dt)
       if got > 0 then
         M.addFood(s, sides[k], got)
         if sides[k] == A.YOU then
+          -- WHAT CAME HOME THIS TICK, for the mixer's delivery heartbeat.
+          -- `got` is the only honest source: the FOOD POOL is not, because
+          -- queens eat out of it on the same tick, so a frame that both
+          -- delivered and fed nets to zero and the heartbeat would skip
+          -- exactly when the colony is busiest.
+          s.deliveredThisTick = (s.deliveredThisTick or 0) + got
           print(string.format("@forage delivered=%d food=%d t=%.1f",
             got, M.foodOf(s, A.YOU), s.time))
         end

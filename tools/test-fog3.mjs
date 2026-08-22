@@ -19,7 +19,7 @@
 // Written to FAIL. Each check below has a control or an inverse: if the
 // latch stops latching, if the disc starts varying with kind, or if
 // adjacency observation comes back, exactly one of these goes red.
-import { api, driver, makeReport } from './drive.mjs';
+import { api, driver, makeReport, releaseAll } from './drive.mjs';
 import { execSync } from 'child_process';
 import { writeFileSync, unlinkSync, existsSync, copyFileSync } from 'fs';
 import { readPNG } from './png.mjs';
@@ -539,8 +539,24 @@ function enemyPixels(path, cx, cy, rad) {
 // THE STATE THIS PHASE NEEDS: a mound that is `visited` (you walked over
 // it once) and enemy-held RIGHT NOW, with none of your ants on it.
 //
-// It cannot be manufactured by attacking and waiting, and both attempts
-// to do so are worth writing down, because both look reasonable:
+// ON ITS OWN BOARD SINCE 2026-08-20, and that is the point of this
+// rewrite. This used to walk toward `discover`'s red colony and WAIT for
+// the level to hand the state over, which works only while red is strong
+// enough to still hold something when the walk ends. The tuning pass that
+// weakened red (22 ants -> 14) broke it, and the gate went red for a
+// LEVEL BALANCE change while the fog rendering it tests was untouched.
+// Restoring red's second queen fixed the symptom and left the dependency
+// in place for the next tuning pass to trip over.
+//
+// A gate asserting on a RENDER RULE must not be able to fail because a
+// level got easier. `gatefog` (sim/campaign.lua) authors the state
+// instead: a thin column that takes the subject mound ONCE -- which is
+// what makes it `visited`, since the latch is set on arrival and never on
+// sight -- and a fed, queened red capital 800 units behind it that
+// retakes it reliably. Same discipline as `gatebattle` and `gatespider2`.
+//
+// The two earlier attempts to manufacture this on a campaign board are
+// worth keeping, because both look reasonable:
 //
 //   "attack something too strong and let them die" -- 15 against 20 is a
 //   GRIND under plan 03's HP combat, not a rout. Six thousand frames in
@@ -548,107 +564,117 @@ function enemyPixels(path, cx, cy, rad) {
 //   swinging: `held=true`, state 1, the whole time.
 //
 //   "attack, then withdraw" -- a column already in a fight is not
-//   selectable, so the withdrawing drag emits no intent at all. And
-//   while the gate waited, the fight resolved the other way: twelve ants
-//   TOOK the mound (state 1, ours), and red counter-attacked and retook
-//   the mound behind it.
-//
-// That last accident is the drive. Take ground toward the rival, let the
-// AI push back -- which is what this level is for, and `test-war`
-// already gates that it does -- and the board produces the state on its
-// own: ground you stood on, in enemy hands, nobody of yours there. This
-// WAITS FOR that state rather than scripting it, and says so plainly if
-// the board never produces one.
-let rm = await dd.inspect();
-const redSide = Object.values(rm.mound).map(m => m.owner)
-  .find(o => o && o !== 'you');
-R.check('discover fields a rival colony to be seen by', !!redSide,
-        `owners=${[...new Set(Object.values(rm.mound).map(m => m.owner))]}`);
+//   selectable, so the withdrawing drag emits no intent at all.
+const FOGCART = process.cwd() + '/test/gatefog-cart.wasc';
+writeFileSync('app/startlevel', 'gatefog');
+try {
+  execSync('./build.sh', { stdio: 'ignore' });
+  copyFileSync(process.cwd() + '/formix.wasc', FOGCART);
+} finally {
+  if (existsSync('app/startlevel')) unlinkSync('app/startlevel');
+  // Put the ordinary cart back, always -- see the note on the discover
+  // cart above for what leaving a level-locked one behind costs.
+  execSync('./build.sh', { stdio: 'ignore' });
+}
+// ITS OWN SESSION, and this is load-bearing. `dd` and `df` drive
+// different CARTS, and a session holds exactly one emulator host: booting
+// the fog fixture on the session `dd` is using would replace the discover
+// cart underneath it, so every later `dd.inspect()` would silently read
+// the fog board instead. That is not hypothetical -- it is what the first
+// version of this rewrite did, and phase 7 duly compared two panels on a
+// four-mound fixture and reported a real-looking fog regression.
+const tf = api('formix-fog3-fixture');
+const df = driver(tf, FOGCART);
+await df.boot(7, { level: 'gatefog' });
 
-// Reach is in WORLD units and positions come back in SCREEN pixels, so
-// the walk needs the scale between them; `@cam` reports zoom, which is
-// exactly that factor.
-//
-// NOT PROBED BY TRYING SENDS AND SEEING WHICH STICK, which was an
-// earlier version and the instructive one. An out-of-reach send does not
-// merely fail: the drag that made it lands on empty ground, and a drag
-// on empty ground PANS THE CAMERA (plan 02). So each rejected probe
-// scrolled the board, every screen position banked before it went stale,
-// and the loop then failed to pick up even the neighbour it had
-// successfully sent to a moment earlier -- reporting "no route" for a
-// board where the route was fine and the view had walked off it. Probing
-// by attempt is not free here; the attempt is a move.
-const route = (st, fromId, toId) => {
-  const z = (st.cam && st.cam.zoom) || 1;
-  const ids = Object.keys(st.mound).filter(k => st.pos[k]);
-  const canReach = (a, b) =>
-    dist(st.pos[a], st.pos[b]) <= (st.mound[a].reach * z) * 1.02;
-  // Breadth-first over the reach graph: the shortest chain of hops
-  // rather than the greedily-nearest one, which walks into corners on
-  // any board with a detour in it.
-  const prev = { [fromId]: null };
-  const q = [fromId];
-  while (q.length) {
-    const a = q.shift();
-    if (a === toId) break;
-    for (const k of ids) {
-      if (prev[k] !== undefined || !canReach(a, k)) continue;
-      prev[k] = a; q.push(k);
-    }
+// THE WALK IS TWO SENDS AND IT IS SCRIPTED, not searched. On a fixture
+// board the route is known -- n1 -> n2 -> n3 -- so there is no reach
+// graph to solve and no chance of the walk picking a different target
+// than the one the board was built around. That removal is most of what
+// this rewrite buys: the old version ran a breadth-first search over the
+// reach graph, and every failure in it presented as a fog failure.
+// BY ROLE, NOT BY ID. An earlier version hardcoded n1 -> n2 -> n3, and
+// adding one mound to the fixture renumbered everything after it: the
+// gate then walked to the wrong mound and reported "no enemy to lose
+// ground to" for a board that had two. Ids are positional and the fixture
+// is still being tuned, so the gate finds its landmarks by what they ARE.
+const FOG = {};
+{
+  const s0 = await df.inspect();
+  // The subject is the enemy mound NEAREST the player's home -- the one
+  // the two-hop walk is built to reach. Its capital is the other one.
+  const homeF = Object.entries(s0.mound)
+    .filter(([, v]) => v.owner === 'you' && v.queens > 0)
+    .sort((a, b) => b[1].g - a[1].g).map(([k]) => k)[0];
+  const enemies = Object.entries(s0.mound)
+    .filter(([k, v]) => v.owner && v.owner !== 'you' && s0.pos[k])
+    .sort((a, b) => dist(s0.pos[a[0]], s0.pos[homeF]) -
+                    dist(s0.pos[b[0]], s0.pos[homeF]));
+  FOG.home = homeF;
+  FOG.subject = enemies[0] && enemies[0][0];
+  R.check('the fog fixture boots with an enemy to lose ground to',
+          enemies.length >= 2 && !!FOG.subject,
+          `home=${homeF} enemies=${enemies.map(([k, v]) => `${k}(${v.owner})`).join(',')}`);
+
+  // The stepping stone: the neutral mound between home and the subject.
+  const z0 = (s0.cam && s0.cam.zoom) || 1;
+  FOG.stone = Object.entries(s0.mound)
+    .filter(([k, v]) => !v.owner && s0.pos[k] &&
+                        dist(s0.pos[k], s0.pos[homeF]) <= s0.mound[homeF].reach * z0 * 1.02)
+    .sort((a, b) => dist(s0.pos[a[0]], s0.pos[FOG.subject]) -
+                    dist(s0.pos[b[0]], s0.pos[FOG.subject])).map(([k]) => k)[0];
+
+  if (FOG.stone && FOG.subject) {
+    await df.send(s0.pos[FOG.home], s0.pos[FOG.stone]);
+    await df.step(2000);
+    const s1 = await df.inspect();
+    // Launch the assault from whichever mound of ours actually reaches
+    // the subject -- the stone if we took it, home otherwise.
+    const z1 = (s1.cam && s1.cam.zoom) || 1;
+    const from = Object.entries(s1.mound)
+      .filter(([k, v]) => v.owner === 'you' && v.g > 0 && s1.pos[k] &&
+                          dist(s1.pos[k], s1.pos[FOG.subject]) <= v.reach * z1 * 1.02)
+      .sort((a, b) => b[1].g - a[1].g).map(([k]) => k)[0];
+    if (from) await df.send(s1.pos[from], s1.pos[FOG.subject]);
+    // 4500 frames (75s): plan 05 slowed combat ~3x (1s swings -> 3s, plus
+    // the facing cone forfeiting a swing when nobody is in it), so a
+    // defended hop that fitted the old 25s budget can still be fighting.
+    await df.step(4500);
   }
-  if (prev[toId] === undefined) return null;
-  const path = [];
-  for (let k = toId; k; k = prev[k]) path.unshift(k);
-  return path;
-};
-
-const homeId2 = Object.entries(rm.mound)
-  .filter(([, v]) => v.owner === 'you' && v.queens > 0).map(([k]) => k)[0]
-  || homeId;
-const enemyId = Object.entries(rm.mound)
-  .filter(([k, v]) => v.owner === redSide && rm.pos[k])
-  .sort((a, b) => b[1].fg - a[1].fg).map(([k]) => k)[0];
-const path = route(rm, homeId2, enemyId);
-R.check('a route from home to the rival exists on this board',
-        path && path.length > 1,
-        path ? path.join(' -> ') : 'NO PATH (reach graph disconnected?)');
-
-// PLAN 05 SLOWED COMBAT ~3x (1s swings -> 3s, plus the facing cone
-// forfeiting a swing whenever nobody is in the +/-45 degree cone), so a
-// defended hop that fell inside the old 1500-frame (25s) budget can now
-// still be fighting when this loop moves on -- `after.mound[...]` never
-// reports `you`, `at` never advances, and everything downstream (which
-// friendly mound is left in reach of the eventual "quiet" mound) is
-// built on a walk that silently stalled partway. 4500 frames (75s) is
-// generous rather than tightly retuned: this loop's job is to make
-// progress along the path, not to measure combat speed, which
-// test-battle already does precisely.
-let at = homeId2;
-for (let i = 1; i < (path || []).length; i++) {
-  const st = await dd.inspect();
-  await dd.send(st.pos[at], st.pos[path[i]]);
-  await dd.step(4500);
-  const after = await dd.inspect();
-  if (after.mound[path[i]] && after.mound[path[i]].owner === 'you') at = path[i];
 }
 
-// Now wait for the board to hand us the state.
+// n3 IS TAKEN AND THEN LOST. The taking is what sets `visited`; the
+// losing is what makes it enemy-held while remembered. Both are asserted,
+// because a board where the column never arrived would produce an
+// unvisited mound and the phase below would silently be testing the
+// UNKNOWN state instead of the DISCOVERED one.
+{
+  const s2 = await df.inspect();
+  const sub = FOG.subject && s2.mound[FOG.subject];
+  R.check('the column reached the subject mound (so it is DISCOVERED)',
+          sub && sub.visited === true,
+          `${FOG.subject} visited=${sub && sub.visited} owner=${sub && sub.owner}`);
+}
+
+// Now wait for red to take it back. Bounded, and it says so plainly if
+// the board never produces the state -- which on this fixture would mean
+// the counter-attack itself is broken, not that a level got easier.
 let quietId = null;
 for (let i = 0; i < 14 && !quietId; i++) {
-  const st = await dd.inspect();
+  const st = await df.inspect();
   quietId = Object.entries(st.mound)
     .filter(([k, v]) => v.visited && v.owner && v.owner !== 'you' &&
                         !v.held && !v.contested && v.fg > 0 && st.pos[k])
     .map(([k]) => k)[0] || null;
-  if (!quietId) await dd.step(600);
+  if (!quietId) await df.step(600);
 }
-R.check('the board produced a DISCOVERED-but-enemy-held mound to look at',
+R.check('the fixture produced a DISCOVERED-but-enemy-held mound to look at',
         !!quietId, quietId || 'none appeared in 8400 frames');
 
 if (quietId) {
-  const st = await dd.inspect();
+  const st = await df.inspect();
   const [qx, qy] = st.pos[quietId];
-  await dd.shot(SHOT3);
+  await df.shot(SHOT3);
   const quietRed = enemyPixels(SHOT3, qx, qy, 90);
   R.check('a discovered-but-absent enemy garrison is NOT drawn',
           quietRed <= 12,
@@ -671,14 +697,14 @@ if (quietId) {
   R.check('we hold a mound within reach to launch the control assault from',
           !!mine, mine || 'nothing of ours reaches it');
   if (mine) {
-    const out = await dd.send(st.pos[mine], st.pos[quietId]);
+    const out = await df.send(st.pos[mine], st.pos[quietId]);
     const sent = (out || []).filter(l => l.startsWith('@i send')).pop();
     // A FEW FRAMES ONLY: `contested` is the INBOUND state and it ends the
     // moment the column lands. Stepping a comfortable margin here
     // measures the fight instead of the reveal.
-    await dd.step(200);
-    const rc = await dd.inspect();
-    await dd.shot(SHOT4);
+    await df.step(200);
+    const rc = await df.inspect();
+    await df.shot(SHOT4);
     const [cx2, cy2] = rc.pos[quietId];
     const hotRed = enemyPixels(SHOT4, cx2, cy2, 90);
     // WHAT THIS CONTROL DOES AND DOES NOT PROVE, stated because the
@@ -689,14 +715,10 @@ if (quietId) {
     // changed. That is the plan-03 behaviour plan 04 could have taken
     // down with it, and it is what the assertion is for.
     //
-    // It does NOT prove that OUR send is what contested it. This board is
-    // in an active war by now and the rival attacks on its own, so the
-    // contest is sometimes ours and sometimes theirs -- `sent` records
-    // which, and the assertion deliberately does not require it to be
-    // ours. Demanding it would make the gate flaky about something it is
-    // not testing; `test-war` already gates that a player send starts a
-    // fight. What matters here is that a contested mound SHOWS its
-    // defenders and a merely-discovered one does not.
+    // It does NOT prove that OUR send is what contested it -- red attacks
+    // on its own here too, and `sent` records which. Demanding it be ours
+    // would make the gate flaky about something it is not testing;
+    // test-war already gates that a player send starts a fight.
     R.check('CONTROL: the SAME garrison IS drawn once an assault is inbound',
             rc.mound[quietId] && rc.mound[quietId].contested === true &&
             hotRed > quietRed * 3 + 20,
@@ -773,5 +795,13 @@ if (quietId) {
 
 R.check('no lua errors in the discover run', dd.errors().length === 0,
         dd.errors()[0] || '');
+R.check('no lua errors on the fog fixture', df.errors().length === 0,
+        df.errors()[0] || '');
 R.check('no lua errors', d.errors().length === 0, d.errors()[0] || '');
-process.exit(R.done() ? 0 : 1);
+// HAND THE HOSTS BACK BEFORE EXITING. This gate opens three sessions and
+// released none; `process.exit()` runs no async cleanup and never fires
+// `beforeExit`, so the release has to be awaited here or the hosts stay
+// parked until the server evicts them ten minutes later.
+const okAll = R.done();
+await releaseAll();
+process.exit(okAll ? 0 : 1);

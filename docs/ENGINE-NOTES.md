@@ -265,6 +265,23 @@ the honest test is two arms from one seed compared at the same clock.
 
 ## Testing
 
+**A PIXEL GATE'S DETECTOR IS A CONSTRAINT ON THE ART.** Symptom: a colour
+change that is obviously correct reddens an unrelated gate. `test-queencarry`
+finds a live enemy queen by counting red ink (`g < r * 0.45`), and the queen
+colour was a hardcoded `(0.96,0.40,0.30)` -> `g/r = 0.417`. Fixing queens to
+wear their own side's colour (gold's queens were rendering RED, because the
+literal only ever matched red) lightened red's queen to `g/r = 0.480` -- over
+the threshold, so the gate could no longer see the thing it measures.
+
+The fix was to retune the render (lighten by 0.20, not 0.28) rather than move
+the threshold. 0.20 puts `g/r` back at 0.419, where the old literal sat, and
+separates the queen from her own workers slightly BETTER than before (0.224
+vs 0.204 RGB distance). Moving the threshold instead would have kept the gate
+green while making it mean less: it is measuring a real property -- an enemy
+queen is red and visible -- and a bound that moves whenever the art moves is
+not a bound.
+
+
 **A control that cannot fail is not a control.** Two of these silently
 defanged themselves when the game changed: a famine test that zeroed
 `food` stopped being a famine once sources regrew (it must zero `regrow`
@@ -349,7 +366,41 @@ reports node screen positions and the driver reads them.
 
 ## romdev
 
-Three bugs found here, all written up in `internal-romdev/feedback/`:
+**A BLACK PLAYTEST WINDOW: do not trust a screenshot.** Symptom: the window
+is black, but `playtest({op:'status'})` says `running:true` at a healthy
+60fps with the frame counter climbing, and `playtest({op:'framebuffer'})` /
+`frame({op:'screenshot'})` come back showing the game rendering perfectly.
+Every instrument says fine; the human's screen is black.
+
+Those captures read the CART's own FBO. A GL-direct window presents by a
+separate GPU blit. When the two disagree -- which is exactly this class of
+bug -- the capture is a picture of a buffer nobody is looking at. Capture
+the REAL window instead:
+
+```sh
+DISPLAY=:0 xwininfo -root -tree | grep '"<window title>' | grep node
+DISPLAY=:0 import -window 0x<id> /tmp/real.png
+```
+
+Cost hours twice, and once led to telling the human their window was fine
+while they were staring at black. Two distinct causes, both now fixed:
+
+- **Another session tearing down a GL cart** blanked a live window in an
+  unrelated session. `makeCurrent` lived only on webgl-node's wrapper
+  object, which callers throw away in favour of the bare context, so
+  wasmcart's teardown silently failed to switch contexts -- and GL object
+  names are plain integers with no context identity, so its deletes
+  destroyed another context's identically-numbered textures. Needs
+  webgl-node >= 1.5.1 and wasmcart >= 0.24.0.
+- **A `loadMedia` while a window is attached** left the window bound to the
+  old, destroyed context. Needs romdevtools >= 0.129.0.
+
+If it happens again on current versions, the cart log line to look for is
+`@fx DISABLED` -- `render/fx.lua` degrades to the no-bloom path rather than
+aborting the frame, so the game stays PLAYABLE and the broken state stays
+inspectable instead of taking the window down with it.
+
+Three more bugs found here, all written up in `internal-romdev/feedback/`:
 
 - **`input({op:'set'})` axes are dropped for wasmcart.** The tool validates
   and forwards `{axes:{lx,ly}}`; `WasmcartHost._padFromInput` reads

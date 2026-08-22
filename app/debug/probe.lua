@@ -494,7 +494,15 @@ function M.command(S, what)
     -- Restore whatever was in memory, merged with what the blob had, so
     -- the probe leaves no trace.
     for k in pairs(before) do prog.beaten[k] = true end
+    -- WHAT THE CAMPAIGN OFFERS NEXT, which is otherwise invisible to a
+    -- gate. `nextLevelId` is the only observable difference between "the
+    -- campaign ended here" and "the campaign advanced into the gate
+    -- fixtures" -- the celebration card reports `celebrate=true` either
+    -- way, so a gate reading the dialog cannot tell the two apart. It is
+    -- printed here because campaign.next stopping at the campaign
+    -- boundary is a rule with no other witness.
     print("@dbg beatlevel " .. tostring(S.levelId) ..
+          " next=" .. tostring(S.nextLevelId) ..
           " beaten=" .. table.concat(ids, ",") ..
           " fromblob=" .. (ok and table.concat(back, ",") or "REJECTED"))
 

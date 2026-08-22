@@ -94,6 +94,15 @@ function love.load()
   if home then vp.centreOn(home.x, home.y) end
 
   audio.init()
+  -- PUSH THE SETTINGS INTO THE MIXER, whether they came from a save or are
+  -- the defaults. audio.init() only loads sources; the two volume sliders
+  -- live in ui/menu.lua and nothing else applies them, so without this a
+  -- restored setting sits in the settings table and never reaches a gain.
+  -- After audio.init() rather than before it for no reason other than
+  -- symmetry with everything else that configures a loaded subsystem --
+  -- the volumes are plain numbers on the module and neither call reads
+  -- the other's work.
+  require("ui.menu").applyVolumes()
   probe.init(S)
   booted = true
 
@@ -298,6 +307,41 @@ function love.update()
   end
 
   sim.update(S, DT)
+
+  -- HAND THE SIM'S EVENTS TO THE MIXER.
+  --
+  -- audio.onWorldEvent and audio.onActivity existed and NOTHING EVER
+  -- CALLED EITHER ONE -- so a queen being raised, an ant hatching, a
+  -- mound upgraded and a colony dying were all silent, along with the
+  -- delivery heartbeat that audio/init.lua's rule 2 is written about.
+  -- Found while gating the music/sfx split: with the clank branch as the
+  -- only live sound path, a gate that drove a real player action saw
+  -- `shots` stay at zero.
+  --
+  -- Read BEFORE the renderer consumes them and non-destructively: the
+  -- event list is a per-frame channel that sim.update trims itself, and
+  -- draining it here would take the events away from ui/fx.
+  do
+    local ev = S.events
+    for i = 1, #ev do
+      if not ev[i]._heard then
+        ev[i]._heard = true
+        audio.onWorldEvent(ev[i])
+      end
+    end
+  end
+
+  -- THE COLONY'S HEARTBEAT: how much food came home this tick.
+  --
+  -- Read straight off the sim rather than diffed from the food POOL. The
+  -- pool is not the delivery: queens eat out of it on the same tick, so a
+  -- frame that both delivered and fed nets to zero -- and the heartbeat
+  -- would fall silent exactly when the colony is at its busiest, which is
+  -- the one thing this sound exists to convey.
+  if (S.deliveredThisTick or 0) > 0 then
+    audio.onActivity(S.deliveredThisTick)
+  end
+
   audio.update(S, DT)
 
   -- Autosave every half minute of play: there is one colony and nothing

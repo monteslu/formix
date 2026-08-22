@@ -1,7 +1,7 @@
 // The suite. Every test drives the real cart through romdev and asserts on
 // what the SIM reports or what the PIXELS show -- never on a claim.
 import { execSync } from 'child_process';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, readdirSync } from 'fs';
 
 // REFUSE TO RUN AGAINST AN OVERRIDDEN CART. `app/startlevel` boots the
 // game into a named level, which is exactly what most of these gates do
@@ -25,6 +25,11 @@ const suites = ['test-reachable', 'test-overlap', 'test-queen', 'test-grey', 'te
                 // with the cheap gates rather than in the rebuild
                 // quarantine below.
                 'test-progress', 'test-celebrate',
+                // The music/sfx split. Drives the real pause menu (two
+                // rows a player can reach) and reads the cart's own
+                // @audio report, so it packs no board and sits with the
+                // cheap gates.
+                'test-audio',
                 // THE CART-REBUILDING GATES GO LAST, all of them. test-war
                 // was the first, for the reason below; test-food and
                 // test-bootstrap pack their own boards the same way and
@@ -36,7 +41,25 @@ const suites = ['test-reachable', 'test-overlap', 'test-queen', 'test-grey', 'te
                 // this list -- it packs `gatesiege`, so it belongs in the
                 // quarantine, and it has been running only by hand since.
                 // test-queencarry (plan 06) packs `gatesiege2` next to it.
-                'test-siege', 'test-queencarry'];
+                'test-siege', 'test-queencarry',
+                // The last campaign level. Packs its own `open` board and
+                // rebuilds twice, so it belongs in the quarantine.
+                'test-open'];
+
+// NOT IN THE LIST, ON PURPOSE. There are more gate FILES in tools/ than
+// there are entries above, which reads as an oversight to anyone who
+// counts them, so it is written down rather than left to be rediscovered:
+//
+//   test-battle, test-spider  heavyweights, run by hand. Both drive long
+//                             fights and neither is quick enough to earn
+//                             its place in a suite that already takes six
+//                             minutes.
+//   test-fog                  superseded by test-fog3, which asserts the
+//                             same rule on a board that does not depend on
+//                             a level's difficulty tuning.
+//
+// Anything else missing from `suites` is a bug, not a decision.
+const UNREGISTERED = ['test-battle', 'test-spider', 'test-fog'];
 // LAST, ON PURPOSE: test-war rebuilds the cart twice (it needs its own
 // level) and the pixel gate that followed it came back with a completely
 // black frame on two separate runs, then passed 4/4 in isolation. Putting
@@ -72,6 +95,28 @@ if (!await serverAlive()) {
   console.error('  cd ~/code/cliemu/romdev/packages/romdevtools && \\');
   console.error('    setsid nohup node src/mcp/server.js > /tmp/rom-dev-mcp.log 2>&1 < /dev/null &');
   process.exit(3);
+}
+
+// A NEW GATE FILE THAT NOBODY REGISTERED IS A GATE THAT NEVER RUNS, and
+// it fails silently and permanently -- exactly what happened to
+// test-siege, which was written during plan 05 and ran only by hand for
+// two plans before anyone noticed. Every tools/test-*.mjs must be either
+// in `suites` or in UNREGISTERED above; a file in neither stops the suite
+// rather than being quietly skipped.
+{
+  const onDisk = readdirSync('tools')
+    .filter(f => /^test-.*\.mjs$/.test(f))
+    .map(f => f.replace(/\.mjs$/, ''));
+  const known = new Set([...suites, ...UNREGISTERED]);
+  const orphans = onDisk.filter(f => !known.has(f));
+  if (orphans.length) {
+    console.error(`REFUSING TO RUN: ${orphans.length} gate file(s) are in ` +
+                  'neither the suite nor the deliberately-unregistered list:');
+    for (const o of orphans) console.error(`  tools/${o}.mjs`);
+    console.error('Add each to `suites` (it runs) or to UNREGISTERED (it does');
+    console.error('not, and the comment there says why).');
+    process.exit(2);
+  }
 }
 
 let bad = 0;

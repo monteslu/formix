@@ -47,6 +47,16 @@ local SIDE_COL = {
 }
 local ROLE_SIZE = { 1.0, 0.86, 1.28 }
 
+-- A queen is her side's colour, lifted toward white so she reads as
+-- royalty beside her own workers. Mixing toward white rather than simply
+-- scaling up keeps a already-bright side (gold) from clipping to a flat
+-- wash while still separating her from the crowd.
+local function lighten(c, amt)
+  return { c[1] + (1 - c[1]) * amt,
+           c[2] + (1 - c[2]) * amt,
+           c[3] + (1 - c[3]) * amt }
+end
+
 -- Ants carrying food get a bright dot: at a glance, the ratio of laden to
 -- empty ants on a road tells you whether it is productive. That is the
 -- single most informative pixel in the game and it costs one extra disc.
@@ -441,8 +451,45 @@ function M.draw(snap, vp)
     local reveal = (n.owner == "you") or n.held
     if n.seen and reveal and n.queens and #n.queens > 0 then
       local sx, sy = vp.worldToScreen(n.x, n.y)
-      local col = (n.owner == "you") and { 0.95, 0.78, 0.32 }
-                                     or { 0.96, 0.40, 0.30 }
+      -- A QUEEN WEARS HER SIDE'S COLOUR, like every other body.
+      --
+      -- This was a binary you/not-you with two hardcoded literals, so
+      -- EVERY enemy queen rendered the same reddish tone -- gold's queens
+      -- came out red on a gold mound, surrounded by yellow gold workers.
+      -- Reported from play on the open field, the first board that fields
+      -- two rival colours at once, which is why it survived until now: on
+      -- every earlier level the only enemy IS red, so the literal happened
+      -- to be right.
+      --
+      -- The workers (below) and the corpses (above) both resolve their
+      -- colour through SIDE_COL and fall back to ENEMY_COL for a side with
+      -- no entry; queens now do the same, so a new colour is one table
+      -- entry rather than three call sites.
+      --
+      -- Her own tint stays: a queen is lighter than her workers so she
+      -- reads as royalty rather than as a big ant, which is what the two
+      -- literals were really encoding. lighten() keeps that relationship
+      -- for any side rather than baking it per colour.
+      local base = (n.owner == "you") and YOUR_COL
+                 or SIDE_COL[n.owner] or ENEMY_COL
+      -- 0.20, NOT 0.28, and the constraint is a GATE's detector.
+      --
+      -- test-queencarry finds a live enemy queen by counting RED INK, with
+      -- `g < r * 0.45` as the test. The old hardcoded queen was
+      -- (0.96,0.40,0.30) -> g/r = 0.417, comfortably under. Lightening red's
+      -- worker colour by 0.28 lands at 0.480, which is over -- so the gate
+      -- stopped being able to see the queen it was measuring, and correctly
+      -- said so (liveInk=14px, needs >30).
+      --
+      -- 0.20 gives g/r = 0.419, which is where the old literal sat, AND it
+      -- separates the queen from her own workers slightly BETTER than the old
+      -- pair did (0.224 vs 0.204 in RGB distance) -- so she still reads as
+      -- royalty rather than a big ant. Tuning the render to keep an existing
+      -- detector working is the right way round here: the gate is measuring a
+      -- real property (an enemy queen is red and visible), and a threshold
+      -- moved to accommodate a render change would be a threshold that no
+      -- longer means anything.
+      local col = lighten(base, 0.20)
       for qi = 1, #n.queens do
         -- She is MOSTLY STATIC -- a queen who marches reads as a big
         -- worker -- with a small sway and a slow leg cycle so she is

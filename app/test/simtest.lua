@@ -789,16 +789,30 @@ local function testSave()
   local menu = require("ui.menu")
   local cursor = require("ui.cursor")
   cursor.setCounts({ link = 5, danger = 2, caste = 1 })
-  menu.settings.volume = 1
+  menu.settings.music = 1
+  menu.settings.sfx = 4
   menu.settings.palette = 2
   menu.settings.hints = false
   local text2 = save.serialize(a)
   check("save.fits_with_player_state", #text2 <= 4096, #text2 .. " bytes")
 
+  -- THE BLOB HAS TO CONTAIN THEM, asserted on the TEXT.
+  --
+  -- This check is the one that would have caught the bug the two below
+  -- it missed for as long as the settings have existed: menu.serialize
+  -- was never called by anything, so the blob carried no settings at
+  -- all, and the restore assertions still passed because they read the
+  -- live module the test itself had written. An assertion about what is
+  -- in the save has to look at the save.
+  check("save.carries_player_state",
+        text2:match("\nset ") ~= nil and text2:match("\ncur ") ~= nil,
+        "set/cur lines present")
+
   -- Wipe to the opposite of everything above, so a no-op deserialize
   -- cannot pass by leaving the values where they already were.
   cursor.setCounts({ link = 0, danger = 0, caste = 0 })
-  menu.settings.volume = 4
+  menu.settings.music = 4
+  menu.settings.sfx = 0
   menu.settings.palette = 1
   menu.settings.hints = true
 
@@ -809,15 +823,39 @@ local function testSave()
         counts.link == 5 and counts.danger == 2 and counts.caste == 1,
         string.format("%d/%d/%d", counts.link, counts.danger, counts.caste))
   check("save.settings_restored",
-        menu.settings.volume == 1 and menu.settings.palette == 2 and
-        menu.settings.hints == false,
-        string.format("vol=%d pal=%d hints=%s", menu.settings.volume,
-                      menu.settings.palette, tostring(menu.settings.hints)))
+        menu.settings.music == 1 and menu.settings.sfx == 4 and
+        menu.settings.palette == 2 and menu.settings.hints == false,
+        string.format("music=%d sfx=%d pal=%d hints=%s", menu.settings.music,
+                      menu.settings.sfx, menu.settings.palette,
+                      tostring(menu.settings.hints)))
+  -- THE TWO SLIDERS ARE INDEPENDENT, proved on the numbers that reach the
+  -- mixer rather than on the settings that produced them. music=1 and
+  -- sfx=4 above are deliberately opposite ends, so a build that wired
+  -- both rows to one control lands them equal here.
+  local audio = require("audio.init")
+  check("save.volumes_independent",
+        audio.musicVolume < audio.sfxVolume,
+        string.format("music=%.2f sfx=%.2f", audio.musicVolume,
+                      audio.sfxVolume))
+
+  -- A PRE-SPLIT SAVE STILL LOADS. The old three-field form had one
+  -- volume; it reads as the music setting and sfx falls back to default,
+  -- rather than the whole line being refused.
+  menu.settings.music = 0
+  menu.settings.sfx = 0
+  menu.deserialize("2 2 0")
+  check("save.settings_pre_split",
+        menu.settings.music == 2 and menu.settings.sfx == 3,
+        string.format("music=%d sfx=%d", menu.settings.music,
+                      menu.settings.sfx))
+
   -- Leave the defaults as the rest of the suite (and the game) expect.
   cursor.setCounts({ link = 0, danger = 0, caste = 0 })
-  menu.settings.volume = 3
+  menu.settings.music = 3
+  menu.settings.sfx = 3
   menu.settings.palette = 1
   menu.settings.hints = true
+  menu.applyVolumes()
 
   -- OWNERSHIP ROUND-TRIPS, which since the 4X rebuild is the whole save.
   -- The colony's shape used to be its roads; now it is which ground you

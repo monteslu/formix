@@ -15,7 +15,16 @@ app/testmode
 app/opengarden
 # Build-time level override for gates (see main.lua); never committed.
 app/startlevel
-test/suite.log
+# Suite logs, whatever they are named. This was `test/suite.log` exactly,
+# so a run written to any other name (suite08.log, suite-final.log) showed
+# up as an untracked file waiting to be committed by accident.
+test/*.log
+
+# SAVE DATA IS THE PLAYER'S, not the project's. The playtest window writes
+# a rolling checkpoint next to the cart (romdev >= 0.129.0 does this for
+# wasmcart carts, as `<cart>.playtest-autosave.sav`), and a rescued save
+# lands here too. Both are one person's colony -- never a repo artefact.
+*.sav
 
 # macOS finder droppings
 .DS_Store

@@ -24,7 +24,33 @@
 local M = {}
 
 M.enabled = true
-M.masterVolume = 0.85
+
+-- TWO SLIDERS, NOT ONE (Luis, 2026-08-20: "sound control should be
+-- separate with music and sound effects. and sound effects should be
+-- louder than current default").
+--
+-- There was one `masterVolume` and everything multiplied through it, so
+-- the only way to quieten the music was to quieten the game. The three
+-- layers already had independent gain paths -- that is what made this a
+-- split rather than a re-plumb -- so what changed is WHICH number each
+-- layer multiplies by, not how any of them are mixed.
+--
+-- WHICH SIDE THE AMBIENT BED SITS ON: music. The seasonal bed and the
+-- wind are not effects and they are not tunes; they are atmosphere, and
+-- atmosphere belongs with the thing a player turns off when they want a
+-- quiet garden. Binding them to sfx would mean "music off" leaves the
+-- garden still humming, which is not what that control promises. Rain is
+-- weather the SIM is doing and stays with the bed for the same reason.
+--
+-- SFX ARE LOUDER THAN THEY WERE. The old chain put a shot at
+-- 0.8 (its call-site default) x 0.85 (the master) = 0.68 of full scale,
+-- and every one-shot in the game is deliberately quiet already (rule 1 of
+-- this file: nothing is a notification). The sfx slider now runs to 1.0
+-- at its default setting, so the same call site lands at 0.8 -- the shots
+-- got louder without any of their individual mixes being re-tuned, which
+-- keeps the balance BETWEEN them exactly as it was settled by ear.
+M.musicVolume = 0.85
+M.sfxVolume = 1.0
 
 local beds = {}          -- season name -> source
 local sfx = {}           -- name -> source
@@ -135,16 +161,35 @@ end
 -- verified one used as a control -- so a WAV cannot currently prove a cart
 -- makes noise. The cart reporting its own live channel state can. Reported
 -- in internal-romdev/feedback/2026-08-15_audiodebug-silent-for-wasmcart.md.
+-- WHAT A LAYER IS ACTUALLY OUTPUTTING, not what its crossfade is doing.
+--
+-- LOAD-BEARING FOR THE SPLIT, and the difference is the whole gate. The
+-- fade gains (`musicGain`, `bedGain`) are the mixer's own state and they
+-- do NOT move when a slider does: mute the music and `musicGain.calm`
+-- still reads 0.42 while the source is silent. A gate asserting on the
+-- fade gain would therefore go green on a build where the slider was
+-- wired to nothing at all -- it would be measuring the crossfade and
+-- calling it the volume control.
+--
+-- Reporting gain x slider is the number that corresponds to what a
+-- player hears, and it is the same product setGain hands the host, so
+-- there is exactly one arithmetic to be wrong about rather than two.
+local function effective(g, channel)
+  local scale = (channel == "sfx") and M.sfxVolume or M.musicVolume
+  return math.max(0, math.min(1, g or 0)) * scale
+end
+
 function M.report()
   local parts = {}
   for name, src in pairs(beds) do
     if (bedGain[name] or 0) > 0.001 then
-      parts[#parts + 1] = string.format("bed:%s=%.2f%s", name, bedGain[name],
+      parts[#parts + 1] = string.format("bed:%s=%.2f%s", name,
+        effective(bedGain[name], "music"),
         (src.isPlaying and src:isPlaying()) and "P" or "-")
     end
   end
   if (M._rain or 0) > 0.002 then
-    parts[#parts + 1] = string.format("rain=%.2f%s", M._rain,
+    parts[#parts + 1] = string.format("rain=%.2f%s", effective(M._rain, "music"),
       (weather.rain and weather.rain.isPlaying and weather.rain:isPlaying())
       and "P" or "-")
   end
@@ -159,22 +204,41 @@ function M.report()
       -- `tell()` is the real evidence: a channel can report "playing"
       -- after its sample ended, so the POSITION is what proves a loop.
       local pos = (src.tell and src:tell()) or -1
-      parts[#parts + 1] = string.format("music:%s=%.2f%s@%.0f", key, musicGain[key],
+      parts[#parts + 1] = string.format("music:%s=%.2f%s@%.0f", key,
+        effective(musicGain[key], "music"),
         (src.isPlaying and src:isPlaying()) and "P" or "-", pos)
     end
   end
   parts[#parts + 1] = "war=" .. ((tenseFor or 0) > 0 and "1" or "0")
   parts[#parts + 1] = "shots=" .. tostring(M._shotCount or 0)
+  -- THE TWO SLIDERS THEMSELVES. The per-layer gains above are the fade
+  -- state (what the crossfade is doing), NOT the setting -- a music gain
+  -- of 0 is ambiguous between "the player turned music off" and "this
+  -- track is the one currently faded out". A gate proving the controls
+  -- are independent has to see the settings, so they are printed.
+  parts[#parts + 1] = string.format("vol:music=%.2f sfx=%.2f",
+                                    M.musicVolume, M.sfxVolume)
   if M._lastShot then
+    -- EFFECTIVE, for the same reason the music gains are: the call site's
+    -- requested volume does not move when the sfx slider does, so
+    -- reporting it raw would prove nothing about the control.
     parts[#parts + 1] = string.format("last=%s@%.2f", M._lastShot,
-                                      M._lastShotGain or 0)
+                                      effective(M._lastShotGain or 0, "sfx"))
   end
   print("@audio " .. table.concat(parts, " "))
 end
 
-local function setGain(src, g)
+-- WHICH SLIDER A SOURCE ANSWERS TO.
+--
+-- Every gain in this file goes through setGain, so the split lives here
+-- and nowhere else: a caller says how loud this source should be RELATIVE
+-- to its layer, and the layer's slider says how loud that layer is. The
+-- alternative -- multiplying the right slider in at each of the dozen
+-- call sites -- is the version where one gets missed.
+local function setGain(src, g, channel)
   if src and src.setVolume then
-    src:setVolume(math.max(0, math.min(1, g)) * M.masterVolume)
+    local scale = (channel == "sfx") and M.sfxVolume or M.musicVolume
+    src:setVolume(math.max(0, math.min(1, g)) * scale)
   end
 end
 
@@ -236,7 +300,10 @@ function M.play(name, volume)
   -- trap). Stop first so a retrigger restarts from the head instead of
   -- being ignored as already-playing.
   pcall(function() src:stop() end)
-  setGain(src, volume or 0.8)
+  -- THE ONE SFX CALL SITE. Every one-shot in the game arrives here, so
+  -- tagging this single setGain is what puts all of them on the sfx
+  -- slider; ensurePlaying (beds, weather, music) is the music side.
+  setGain(src, volume or 0.8, "sfx")
   pcall(function() src:play() end)
   return true
 end
@@ -431,21 +498,64 @@ end
 -- Called from main with the sim's own events, so the mix follows the world
 -- rather than the interface.
 
+-- THE INTENT KINDS THIS GAME ACTUALLY EMITS.
+--
+-- THIS WAS SPEAKING A DEAD VOCABULARY. It answered to link / reinforce /
+-- danger / abandon / caste -- the verbs of the ROAD-BUILDING game that
+-- preceded the 4X rebuild -- and input/intents.lua has not emitted any
+-- of those since. It emits send, withdraw, queen and upgrade. So every
+-- branch here was unreachable and the game made NO SOUND for any player
+-- action at all: sending ants, raising a queen, spending on a mound, or
+-- being refused any of them was silent, and had been for as long as the
+-- rebuild has existed.
+--
+-- Found while gating the music/sfx split (test-audio): the gate drove a
+-- successful send, watched `shots` stay at 0, and the reason was not the
+-- new slider -- it was that the only sound this game could still make was
+-- the combat clank, which reaches the mixer through M.update's hit
+-- counter rather than through here.
+--
+-- STILL NOT NOTIFICATIONS (rule 1 of this file). A send is the commonest
+-- action in the game and its sound is the quietest thing here; a refusal
+-- gets the same soft low thud it always did. What changed is that they
+-- exist.
 function M.onIntent(kind, ok)
-  if kind == "link" or kind == "reinforce" then
-    if ok then M.play("link", 0.55) else M.play("refuse", 0.5) end
-  elseif kind == "danger" then
-    if ok then M.play("link", 0.35) else M.play("refuse", 0.5) end
-  elseif kind == "abandon" or kind == "caste" then
-    if not ok then M.play("refuse", 0.45) end
+  if kind == "send" then
+    -- The colony picking up and moving. Quiet: this happens constantly.
+    if ok then M.play("link", 0.45) else M.play("refuse", 0.5) end
+  elseif kind == "withdraw" then
+    -- Pulling back off a fight. Same event, lower and a touch softer, so
+    -- the two read as a pair rather than as the same button twice.
+    if ok then M.play("link", 0.32) else M.play("refuse", 0.5) end
+  elseif kind == "queen" then
+    -- The one genuinely momentous thing a player does, and the loudest
+    -- one-shot they can trigger on purpose.
+    if ok then M.play("discover", 0.7) else M.play("refuse", 0.5) end
+  elseif kind == "upgrade" then
+    if ok then M.play("link", 0.5) else M.play("refuse", 0.45) end
   end
 end
 
+-- The sim's own events, as `sim/init.lua` writes them. Same story as
+-- onIntent: this listened for "discover"/"season", which the current sim
+-- never emits, and NOTHING EVER CALLED IT -- main.lua drained the event
+-- list for the renderer and never handed it here. Both halves fixed.
 function M.onWorldEvent(ev)
-  if ev.kind == "discover" then
-    M.play("discover", 0.6)
-  elseif ev.kind == "season" then
-    M.play("season", 0.7)
+  if not ev then return end
+  if ev.kind == "queen" then
+    -- A queen RAISED, from the sim's side. The intent hook above fires on
+    -- the button; this fires on it actually happening, and the cooldown
+    -- means the pair lands as one sound rather than two.
+    M.play("discover", 0.7)
+  elseif ev.kind == "hatch" then
+    -- A new ant. Frequent, so very quiet and hard rate-limited by the
+    -- `discover` cooldown it shares.
+    M.play("link", 0.22)
+  elseif ev.kind == "upgraded" then
+    M.play("season", 0.55)
+  elseif ev.kind == "dead" then
+    -- A colony lost. The only genuinely bad news the game delivers.
+    M.play("threat", 0.6)
   end
 end
 
@@ -458,6 +568,15 @@ function M.onActivity(deliveredDelta, ants)
   M.play("deliver", 0.10 + busy * 0.22)
 end
 
+-- NO CALLER, DELIBERATELY. The 4X rebuild dropped the threat system this
+-- was written for (sim/threats.lua survives only for its rain constant),
+-- and the one piece of bad news the current game delivers -- a colony
+-- dying -- reaches the mixer through onWorldEvent's "dead" branch above.
+-- Kept because the sound file is still in the cart and a predator scare
+-- is a live design question (07-next: spider economics), and NOT wired to
+-- anything in the meantime, because a hook that fires on nothing is how
+-- onIntent came to spend the whole rebuild answering to verbs that no
+-- longer existed.
 function M.onThreat()
   M.play("threat", 0.5)
 end

@@ -166,7 +166,9 @@ a claim. Some gates worth knowing about:
 | `test-forage` | the food ledger closes -- ground + carried + pool + eaten always equals what was taken -- and ants deliver and STAY rather than re-foraging |
 | `test-locrules` | food is a destination, never a bridge or a watchtower |
 | `test-bootstrap` | every board can reach a fed queen from its opening position |
-| `test-fog3` | the three fog states, and that nothing leaks across them: the `visited` latch survives leaving and a save round trip, and every unvisited site on the board measures the same size and brightness whether it is a spider or a small mound |
+| `test-fog3` | the three fog states, and that nothing leaks across them: the `visited` latch survives leaving and a save round trip, and every unvisited site on the board measures the same size and brightness whether it is a spider or a small mound. Runs on its own `gatefog` fixture -- it used to walk `discover`'s red colony and wait for the board to hand over a discovered-but-enemy-held mound, so a difficulty tuning pass reddened a gate that tests RENDERING |
+| `test-audio` | that the music and effects sliders are genuinely separate: music off with effects still audible, then the reverse, plus both orderings of the opposed-slider control. Asserts on EFFECTIVE gains (fade x slider), because the raw fade gain does not move when a slider does -- reading that would pass on a build where the slider was wired to nothing |
+| `test-open` | that the campaign has an ending. `open` was a four-field placeholder and `campaign.complete` refuses generated levels, so the last row could not be beaten by anybody. Also that beating it does not advance into the gate fixtures -- `campaign.next` walked the array unconditionally, and the entry after `open` is `gatefood` |
 
 **Gates are written to fail.** Several were rewritten after passing a
 deliberately sabotaged build — the war gate first passed with the enemy AI

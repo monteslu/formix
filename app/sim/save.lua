@@ -120,6 +120,36 @@ function M.serialize(s)
     local c = s.agents.corpses[i]
     put("C", n2(c.x), n2(c.y), c.side, n2(c.t), c.seed, c.at or "-")
   end
+
+  -- ── WHAT THE PLAYER SET, AND WHAT THEY HAVE LEARNED ──────────────────
+  --
+  -- THESE WERE NEVER ACTUALLY SAVED. ui/menu.lua has had a serialize/
+  -- deserialize pair since the settings existed and NOTHING EVER CALLED
+  -- EITHER ONE -- so every sound, colour and hints choice was lost on
+  -- exit, silently, for as long as the menu has existed. cursor.lua's
+  -- `setCounts` carries the comment "Restored from the save" and was in
+  -- the same position.
+  --
+  -- The in-cart round-trip test did not catch it, and could not: it set
+  -- the values, serialized, set them to their opposites, deserialized,
+  -- and read them back out of the LIVE MODULE -- which the deserialize
+  -- never touched. Both halves of the assertion were reading the same
+  -- module-level table the test itself had just written, so it proved
+  -- the table was a table. It goes green on a blob that contains neither
+  -- line, which is exactly the blob it was asserting about.
+  --
+  -- Written LAST and read defensively, because these are preferences: a
+  -- line that fails to parse must cost a slider position, never the
+  -- colony.
+  do
+    local okm, menu = pcall(require, "ui.menu")
+    if okm and menu and menu.serialize then put("set", menu.serialize()) end
+    local okc, cursor = pcall(require, "ui.cursor")
+    if okc and cursor and cursor.getCounts then
+      local c = cursor.getCounts()
+      put("cur", c.link or 0, c.danger or 0, c.caste or 0)
+    end
+  end
   return table.concat(out, "\n")
 end
 
@@ -214,6 +244,22 @@ function M.deserialize(s, text)
           nd.visited = nd.owner == "you"
         end
         restored = restored + 1
+      end
+    elseif k == "set" then
+      -- The rest of the line, verbatim: menu.deserialize owns its own
+      -- field layout (and its own backward compatibility for the pre-
+      -- split three-field form).
+      local rest = line:match("^set%s+(.*)$")
+      if rest then
+        local okm, menu = pcall(require, "ui.menu")
+        if okm and menu and menu.deserialize then pcall(menu.deserialize, rest) end
+      end
+    elseif k == "cur" then
+      local okc, cursor = pcall(require, "ui.cursor")
+      if okc and cursor and cursor.setCounts then
+        cursor.setCounts({ link = tonumber(f[2]) or 0,
+                           danger = tonumber(f[3]) or 0,
+                           caste = tonumber(f[4]) or 0 })
       end
     elseif k == "C" then
       -- x y side t seed at. `at` restores as-is even though its mound may

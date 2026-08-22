@@ -18,8 +18,15 @@ M.index = 1
 
 -- Settings live here and are read by the systems that care. They are part
 -- of the save so they survive a session.
+-- TWO SOUND SETTINGS, NOT ONE (Luis, 2026-08-20). Both 0..4, both
+-- defaulting to "normal" -- the DEFAULT LOUDNESS of each layer is set in
+-- audio/init.lua (M.musicVolume / M.sfxVolume at scalar 1.0), not here,
+-- so this file stays a slider position and the mix stays in the mixer.
+-- That is what lets "sound effects should be louder" be a one-number
+-- change in audio/init.lua rather than a re-tune of every call site.
 M.settings = {
-  volume = 3,           -- 0..4
+  music = 3,            -- 0..4
+  sfx = 3,              -- 0..4
   palette = 1,          -- 1 = natural, 2 = high contrast (colour-blind safe)
   hints = true,
 }
@@ -36,7 +43,12 @@ M.settings = {
 -- should not have to close the game to do it.
 local ROWS_BASE = {
   { key = "levels", label = "Choose a level" },
-  { key = "volume", label = "Sound" },
+  -- "Music" and "Sound effects" rather than "Sound" and "Effects": the
+  -- pair has to be readable as two halves of the same thing from a couch,
+  -- and "Sound" next to "Effects" leaves a player guessing which one the
+  -- clanks are.
+  { key = "music", label = "Music" },
+  { key = "sfx", label = "Sound effects" },
   { key = "palette", label = "Colours" },
   { key = "hints", label = "Hints" },
   { key = "resume", label = "Back to the colony" },
@@ -65,8 +77,56 @@ local PALETTE_LABEL = { "natural", "high contrast" }
 -- cannot separate. High contrast re-keys those to brightness and blue.
 function M.paletteIsHighContrast() return M.settings.palette == 2 end
 
-function M.volumeScalar()
-  return (M.settings.volume) / 4
+-- THE SLIDER CURVE. "normal" (setting 3) is 1.0 -- the layer at the
+-- volume it was actually tuned for -- and "loud" is a real boost above
+-- it, not the only setting at which the mix is correct.
+--
+-- A plain `setting / 4` was the first cut and it is wrong in a way worth
+-- recording: it makes the DEFAULT 0.75, so every layer in the game plays
+-- at three quarters of its tuned volume unless the player finds the menu
+-- and turns it up. The mix in audio/init.lua was settled by ear at full
+-- strength; a scale whose default silently attenuates it means the ear
+-- tuning and the shipped sound are different sounds. Under that curve
+-- the sfx split did not even deliver what it was for -- a shot landed at
+-- 0.8 x 0.75 = 0.60, QUIETER than the 0.68 the single master used to
+-- give it, which is the opposite of the request.
+--
+-- One table, so the two sliders can never drift apart, and so the shape
+-- is visible rather than being an arithmetic expression to decode.
+local VOLUME_SCALE = { [0] = 0, 0.35, 0.65, 1.0, 1.25 }
+
+-- What the music layer sits at when its slider says "normal". The old
+-- single master was 0.85 and applied to EVERYTHING; keeping it for the
+-- music alone is what leaves the tracks mixed as they were while letting
+-- the effects come up.
+local MUSIC_HEADROOM = 0.85
+
+local function scalarFor(v)
+  return VOLUME_SCALE[math.max(0, math.min(4, v or 3))] or 1.0
+end
+
+function M.musicScalar() return scalarFor(M.settings.music) end
+function M.sfxScalar()   return scalarFor(M.settings.sfx) end
+
+-- ONE PLACE THAT PUSHES SETTINGS INTO THE MIXER. Three call sites used to
+-- each write `masterVolume = scalar * 0.85` by hand, which is three copies
+-- of the same arithmetic and, with two sliders, would have been six.
+--
+-- The old expression baked 0.85 into every write; the headroom is now a
+-- named constant above (MUSIC_HEADROOM) applied to ONE layer, so "normal"
+-- means "this layer at the volume it was tuned for" rather than "every
+-- layer at 0.85 of it".
+function M.applyVolumes()
+  local audio = require("audio.init")
+  -- MUSIC KEEPS ITS HEADROOM, SFX DO NOT. That asymmetry IS the "sound
+  -- effects should be louder than current default" request: at the same
+  -- slider position a shot lands at its full call-site volume while a
+  -- track sits under it, which is the balance an ambient game wants
+  -- anyway (rule 1 of audio/init.lua: nothing is a notification, so the
+  -- one-shots are already quiet by design and were being quietened
+  -- again by the shared master).
+  audio.musicVolume = M.musicScalar() * MUSIC_HEADROOM
+  audio.sfxVolume = M.sfxScalar()
 end
 
 -- dir = +1/-1 steps a value; wrap = true lets it roll over the end.
@@ -78,12 +138,12 @@ end
 -- there a clamp is the familiar behaviour and nothing is unreachable.
 local function adjust(row, dir, wrap)
   local s = M.settings
-  if row.key == "volume" then
-    local v = s.volume + dir
+  if row.key == "music" or row.key == "sfx" then
+    local v = s[row.key] + dir
     if wrap then v = v % 5
     else v = math.max(0, math.min(4, v)) end
-    s.volume = v
-    require("audio.init").masterVolume = M.volumeScalar() * 0.85
+    s[row.key] = v
+    M.applyVolumes()
   elseif row.key == "palette" then
     s.palette = (s.palette == 1) and 2 or 1
   elseif row.key == "hints" then
@@ -227,7 +287,8 @@ end
 
 function M.valueText(row)
   local s = M.settings
-  if row.key == "volume" then return VOLUME_LABEL[s.volume + 1]
+  if row.key == "music" or row.key == "sfx" then
+    return VOLUME_LABEL[s[row.key] + 1]
   elseif row.key == "palette" then return PALETTE_LABEL[s.palette]
   elseif row.key == "hints" then return s.hints and "on" or "off"
   end
@@ -296,18 +357,27 @@ function M.draw(vp)
 end
 
 -- Serialised into the save alongside the colony.
+-- FOUR FIELDS NOW, and the SFX one is appended rather than inserted so an
+-- older three-field string still reads correctly: music takes the old
+-- volume's place (a player who had turned the sound down was turning the
+-- music down too, which is the closest honest reading of that number) and
+-- sfx falls back to the default rather than to whatever they had set.
 function M.serialize()
   local s = M.settings
-  return string.format("%d %d %d", s.volume, s.palette, s.hints and 1 or 0)
+  return string.format("%d %d %d %d", s.music, s.palette,
+                       s.hints and 1 or 0, s.sfx)
 end
 
 function M.deserialize(text)
   local a, b, c = text:match("(%d+) (%d+) (%d+)")
   if not a then return false end
-  M.settings.volume = math.max(0, math.min(4, tonumber(a)))
+  M.settings.music = math.max(0, math.min(4, tonumber(a)))
   M.settings.palette = (tonumber(b) == 2) and 2 or 1
   M.settings.hints = tonumber(c) == 1
-  require("audio.init").masterVolume = M.volumeScalar() * 0.85
+  -- The fourth field, absent in a pre-split save.
+  local d = text:match("%d+ %d+ %d+ (%d+)")
+  M.settings.sfx = d and math.max(0, math.min(4, tonumber(d))) or 3
+  M.applyVolumes()
   return true
 end
 

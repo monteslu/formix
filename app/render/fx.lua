@@ -141,9 +141,46 @@ function M.init(vp)
 end
 
 -- Begin drawing the scene into the HDR target.
+--
+-- A FAILED BIND MUST NOT TAKE THE WHOLE GAME DOWN.
+--
+-- This used to call setCanvas() bare. On 2026-08-21 a human playing in a
+-- romdev playtest window (wasmcart 0.23.0, romdev 0.127.0, gl-direct
+-- present) hit `setCanvas: the framebuffer could not be completed` ~190
+-- seconds into a real game -- GL status 0x8CD7, MISSING_ATTACHMENT, so
+-- the scene texture had stopped being a valid attachment. Because this
+-- is the FIRST bind of the frame and the error propagated, every
+-- subsequent draw in that frame was skipped: no scene, no bloom, no HUD.
+-- The window kept running at a steady 60fps drawing NOTHING, which is a
+-- black screen and looks exactly like a crash. It never recovered,
+-- because nothing here ever re-checked.
+--
+-- Root cause of the invalidation is NOT known (see
+-- internal-formix/BUG_fx-framebuffer-incomplete.md -- it is not canvas
+-- exhaustion, not a resize, not the cart freeing them, and the suspicion
+-- sits below this code in the driver/EGL layer). But the CONSEQUENCE is
+-- ours: bloom is decoration, and this file already has a complete
+-- no-bloom path for hosts without float canvases. Losing the glow is a
+-- cost worth paying; losing the picture is not.
+--
+-- So a failed bind degrades to that existing path exactly as a host with
+-- no rgba16f support would, ONCE, loudly. `M.available = false` makes
+-- render/init.lua skip fx.finish and draw straight to the screen, and
+-- the game keeps playing.
 function M.beginScene()
   if not M.available then return false end
-  love.graphics.setCanvas(sceneC)
+  local ok, err = pcall(love.graphics.setCanvas, sceneC)
+  if not ok then
+    M.available = false
+    M.reason = "scene bind failed: " .. tostring(err)
+    -- Return to the screen so the caller's draws land SOMEWHERE. Without
+    -- this the failed bind can leave the canvas state pointing at a
+    -- target that cannot be completed, and the fallback path would draw
+    -- into nothing -- a black screen by a second route.
+    pcall(love.graphics.setCanvas)
+    print("@fx DISABLED " .. M.reason)
+    return false
+  end
   -- A freshly bound target's contents are undefined; clear or the previous
   -- frame smears.
   love.graphics.clear(0, 0, 0, 1)
@@ -158,8 +195,27 @@ function M.finish(grade, night, amount, vignette)
   if not M.available then return false end
   local g = love.graphics
 
-  -- 1. bright pass, downsampling to quarter res
-  g.setCanvas(brightC)
+  -- SAME GUARD AS beginScene, and it matters MORE here: by this point the
+  -- scene has already been drawn into sceneC, so a bind failure partway
+  -- through the bloom chain would abort the frame with a full picture
+  -- sitting in a target nobody composites. Degrading has to put that
+  -- picture on the screen rather than merely stop.
+  local okB = pcall(g.setCanvas, brightC)
+  if not okB then
+    M.available = false
+    M.reason = "bloom bind failed"
+    print("@fx DISABLED " .. M.reason)
+    -- Composite what we have the cheap way: back to the screen and draw
+    -- the scene target straight out, flipped the same way the shader
+    -- path flips it (see the note at the end of this function).
+    pcall(g.setCanvas)
+    pcall(function()
+      g.setShader()
+      g.setColor(1, 1, 1, 1)
+      g.draw(sceneC, 0, H, 0, 1, -1)
+    end)
+    return false
+  end
   g.clear(0, 0, 0, 1)
   g.setShader(brightS)
   -- The threshold sits just under 1.0 so ordinary in-range scenery (soil,
