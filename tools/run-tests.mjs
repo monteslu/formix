@@ -75,9 +75,13 @@ const pause = ms => new Promise(r => setTimeout(r, ms));
 // saying the host had died. Hours are cheap to lose that way, so the suite
 // checks before it starts and again after any failure, and says which kind
 // of failure it was.
+// Same override run-gates.mjs and drive.mjs honour, so the suite can run on a
+// private server instead of the shared :7331.
+const ROMDEV_URL = process.env.ROMDEV_URL || 'http://127.0.0.1:7331';
+
 async function serverAlive() {
   try {
-    const res = await fetch('http://127.0.0.1:7331/tool/catalog', {
+    const res = await fetch(`${ROMDEV_URL}/tool/catalog`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-romdev-session': 'suite-health' },
       body: JSON.stringify({ op: 'status' }),
@@ -88,7 +92,7 @@ async function serverAlive() {
 }
 
 if (!await serverAlive()) {
-  console.error('REFUSING TO RUN: the romdev server on :7331 is not answering.');
+  console.error(`REFUSING TO RUN: the romdev server at ${ROMDEV_URL} is not answering.`);
   console.error('Every gate drives the cart through it, so all 21 would fail');
   console.error('with ECONNREFUSED and none of it would mean anything.');
   console.error('Start it, then re-run:');

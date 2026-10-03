@@ -3,11 +3,34 @@
 // that sent input({port,buttons}) instead of input({ports}) errored on
 // every call, the errors were never read, and it reported passes for a
 // game that was receiving no input at all.
-const U = 'http://127.0.0.1:7331';
+const U = process.env.ROMDEV_URL || 'http://127.0.0.1:7331';
 
 import { existsSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+
+// FACE BUTTONS ARE NAMED THE WASMCART WAY HERE: 'a' is wasmcart A, the SOUTH
+// button, which is what the game reads as confirm. romdev translates the
+// libretro names by POSITION since f81dd2e6 (2026-09-24): its 'a' is the EAST
+// button (wasmcart B) and its 'y' the WEST one (wasmcart X). Sent as-is, every
+// A press backed out, Y never raised a queen, and ten suites failed on input
+// the game never got. The compass names mean one physical button everywhere,
+// so translate to those at the one place requests leave this process.
+const FACE = { a: 'south', b: 'east', x: 'west', y: 'north' };
+export function romdevArgs(name, args) {
+  if (name !== 'input' || !args) return args;
+  const out = { ...args };
+  if (out.op === 'press' && FACE[out.button]) out.button = FACE[out.button];
+  if (Array.isArray(out.ports)) {
+    out.ports = out.ports.map((p) => {
+      if (!p || typeof p !== 'object') return p;
+      const q = {};
+      for (const [k, v] of Object.entries(p)) q[FACE[k] || k] = v;
+      return q;
+    });
+  }
+  return out;
+}
 
 // EVERY SESSION THIS PROCESS OPENED, so it can hand the hosts back when
 // the gate exits. A gate script is one process per suite; registering here
@@ -37,7 +60,7 @@ export function api(session) {
         const r = await fetch(`${U}/tool/${name}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-romdev-session': session },
-          body: JSON.stringify(args),
+          body: JSON.stringify(romdevArgs(name, args)),
         });
         const txt = await r.text();
         let out; try { out = JSON.parse(txt); } catch { out = txt; }

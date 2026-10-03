@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
+import { romdevArgs } from './drive.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(HERE, '..')
@@ -47,7 +48,7 @@ async function tool (name, args = {}) {
       'Content-Type': 'application/json',
       'x-romdev-session': currentSession,
     },
-    body: JSON.stringify(args),
+    body: JSON.stringify(romdevArgs(name, args)),
   })
   const text = await res.text()
   if (!res.ok) throw new Error(`${name} http ${res.status}: ${text.slice(0, 400)}`)
